@@ -18,8 +18,8 @@ DIRECTION_RETURN = "return"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="direction_go")],
-        [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="direction_return")]
+        [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="direction_go")],
+        [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")]
     ]
     if update.message:
         await update.message.reply_text("👋 مرحبًا بك! اختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
