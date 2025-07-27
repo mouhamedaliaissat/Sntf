@@ -71,8 +71,8 @@ def get_all_stations_ordered():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="direction_go")],
-        [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="direction_return")],
+        [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="direction_go")],
+        [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")],
         [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
         [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
     ]
@@ -112,8 +112,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Choose direction
             keyboard = [
-                [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="report_direction_go")],
-                [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="report_direction_return")],
+                [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="report_direction_go")],
+                [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="report_direction_return")],
                 [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
             ]
             await query.edit_message_text(f"📍 المحطة: {station}\nاختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
