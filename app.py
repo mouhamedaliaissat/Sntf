@@ -5,7 +5,8 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
 from schedules import go_schedule, return_schedule
-import json
+from pymongo import MongoClient, errors
+import asyncio
 
 # Set up logging
 logging.basicConfig(
@@ -20,32 +21,32 @@ ALGERIA_TZ = pytz.timezone('Africa/Algiers')
 # Constants
 DIRECTION_GO = "go"
 DIRECTION_RETURN = "return"
-USER_DATA_FILE = "user_data.json"
 
-# Function to get Algerian time
-def get_algerian_time():
-    return datetime.now(ALGERIA_TZ)
+# MongoDB setup
+MONGODB_URI = os.getenv("MONGODB_URI")
+DB_NAME = "train_bot"
+COLLECTION_NAME = "reports"
 
-# Function to save user data
-def save_user_data(data):
+# Initialize MongoDB client with error handling
+client = None
+reports_collection = None
+
+if MONGODB_URI:
     try:
-        with open(USER_DATA_FILE, 'w') as f:
-            json.dump(data, f)
+        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        # Test the connection
+        client.admin.command('ping')
+        db = client[DB_NAME]
+        reports_collection = db[COLLECTION_NAME]
+        logger.info("✅ Successfully connected to MongoDB Atlas")
+    except errors.ServerSelectionTimeoutError:
+        logger.error("❌ MongoDB connection timeout - check your connection string")
     except Exception as e:
-        logger.error(f"Error saving user data: {e}")
+        logger.error(f"❌ Failed to connect to MongoDB: {e}")
+else:
+    logger.warning("⚠️ MONGODB_URI not set in environment variables")
 
-# Function to load user data
-def load_user_data():
-    try:
-        with open(USER_DATA_FILE, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        logger.error(f"Error loading user data: {e}")
-        return {}
-
-# Get all unique stations preserving order from schedules
+# Function to get all unique stations preserving order from schedules
 def get_all_stations_ordered():
     # Get stations in order from both schedules
     go_stations = list(go_schedule.keys())
@@ -68,6 +69,44 @@ def get_all_stations_ordered():
             seen.add(station)
     
     return all_stations
+
+# Function to get Algerian time
+def get_algerian_time():
+    return datetime.now(ALGERIA_TZ)
+
+# Function to save report to MongoDB
+def save_report_to_db(report_data):
+    try:
+        if reports_collection:
+            result = reports_collection.insert_one(report_data)
+            logger.info(f"✅ Report saved with ID: {result.inserted_id}")
+            return True
+        else:
+            logger.warning("⚠️ MongoDB not available, report not saved")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Error saving report to MongoDB: {e}")
+        return False
+
+# Function to get all reports from MongoDB
+def get_all_reports_from_db():
+    try:
+        if reports_collection:
+            return list(reports_collection.find())
+        return []
+    except Exception as e:
+        logger.error(f"❌ Error getting reports from MongoDB: {e}")
+        return []
+
+# Function to get reports by station from MongoDB
+def get_reports_by_station_from_db(station):
+    try:
+        if reports_collection:
+            return list(reports_collection.find({"station": station}))
+        return []
+    except Exception as e:
+        logger.error(f"❌ Error getting reports by station from MongoDB: {e}")
+        return []
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -123,23 +162,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station = context.user_data.get("report_station")
             direction = DIRECTION_GO
             
-            # Save report
-            user_data = load_user_data()
-            if "reports" not in user_data:
-                user_data["reports"] = []
-            
+            # Save report to MongoDB
             report = {
                 "station": station,
                 "direction": direction,
                 "time": get_algerian_time().strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": get_algerian_time().timestamp()
             }
-            user_data["reports"].append(report)
-            save_user_data(user_data)
             
-            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}")
+            if save_report_to_db(report):
+                await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}")
+            else:
+                await query.edit_message_text(f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}")
+            
             # Return to main menu after delay
-            import asyncio
             await asyncio.sleep(2)
             await start(update, context)
             return
@@ -148,31 +184,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station = context.user_data.get("report_station")
             direction = DIRECTION_RETURN
             
-            # Save report
-            user_data = load_user_data()
-            if "reports" not in user_data:
-                user_data["reports"] = []
-            
+            # Save report to MongoDB
             report = {
                 "station": station,
                 "direction": direction,
                 "time": get_algerian_time().strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": get_algerian_time().timestamp()
             }
-            user_data["reports"].append(report)
-            save_user_data(user_data)
             
-            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}")
+            if save_report_to_db(report):
+                await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}")
+            else:
+                await query.edit_message_text(f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}")
+            
             # Return to main menu after delay
-            import asyncio
             await asyncio.sleep(2)
             await start(update, context)
             return
             
         # View Reports
         elif data == "view_reports":
-            user_data = load_user_data()
-            reports = user_data.get("reports", [])
+            reports = get_all_reports_from_db()
             
             if not reports:
                 response = "❌ لا توجد تقارير محفوظة."
@@ -214,11 +246,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         elif data.startswith("view_station_"):
             selected_station = data.split("_", 2)[2]
-            user_data = load_user_data()
-            reports = user_data.get("reports", [])
-            
-            # Filter reports by station
-            station_reports = [r for r in reports if r["station"] == selected_station]
+            station_reports = get_reports_by_station_from_db(selected_station)
             
             if not station_reports:
                 response = f"❌ لا توجد تقارير للمحطة: {selected_station}"
@@ -347,7 +375,7 @@ def main():
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(handle_callback))
 
-        logger.info("✅ Train Schedule Bot is running with Algeria timezone...")
+        logger.info("✅ Train Schedule Bot is running with Algeria timezone and MongoDB...")
         app.run_polling()
         
     except Exception as e:
