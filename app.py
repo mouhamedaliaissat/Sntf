@@ -45,6 +45,30 @@ def load_user_data():
         logger.error(f"Error loading user data: {e}")
         return {}
 
+# Get all unique stations preserving order from schedules
+def get_all_stations_ordered():
+    # Get stations in order from both schedules
+    go_stations = list(go_schedule.keys())
+    return_stations = list(return_schedule.keys())
+    
+    # Combine stations while preserving order
+    all_stations = []
+    seen = set()
+    
+    # Add stations from go_schedule first (Algiers to El Afroun direction)
+    for station in go_stations:
+        if station not in seen:
+            all_stations.append(station)
+            seen.add(station)
+    
+    # Add stations from return_schedule (El Afroun to Algiers direction)
+    for station in return_stations:
+        if station not in seen:
+            all_stations.append(station)
+            seen.add(station)
+    
+    return all_stations
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="direction_go")],
@@ -66,20 +90,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Report Train Arrival
         if data == "report_train":
-            stations = list(set(list(go_schedule.keys()) + list(return_schedule.keys())))
-            station_buttons = [
-                [InlineKeyboardButton(station, callback_data=f"report_station_{station}")]
-                for station in stations[:10]  # Limit to 10 stations per page
-            ]
-            if len(stations) > 10:
-                # Add more stations in second column if needed
-                pass
+            stations = get_all_stations_ordered()  # Get all stations in proper order
+            logger.info(f"Total stations available: {len(stations)}")
+            
+            # Create station buttons (2 stations per row to avoid overflow)
+            station_buttons = []
+            for i in range(0, len(stations), 2):  # Two stations per row
+                row = []
+                row.append(InlineKeyboardButton(stations[i], callback_data=f"report_station_{stations[i]}"))
+                if i + 1 < len(stations):
+                    row.append(InlineKeyboardButton(stations[i + 1], callback_data=f"report_station_{stations[i + 1]}"))
+                station_buttons.append(row)
+            
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
             await query.edit_message_text("📍 اختر المحطة التي وصل إليها القطار:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
             
         elif data.startswith("report_station_"):
-            station = data.split("_", 3)[2]
+            station = data.split("_", 2)[2]
             context.user_data["report_station"] = station
             
             # Choose direction
@@ -110,8 +138,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_user_data(user_data)
             
             await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}")
-            # Show main menu after 3 seconds
-            await asyncio.sleep(3)
+            # Return to main menu after delay
+            import asyncio
+            await asyncio.sleep(2)
             await start(update, context)
             return
             
@@ -134,8 +163,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_user_data(user_data)
             
             await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون → الجزائر\n🕐 الوقت: {report['time']}")
-            # Show main menu after 3 seconds
-            await asyncio.sleep(3)
+            # Return to main menu after delay
+            import asyncio
+            await asyncio.sleep(2)
             await start(update, context)
             return
             
@@ -158,11 +188,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     stations_with_reports[station] = []
                 stations_with_reports[station].append(report)
             
-            # Create station buttons
-            station_buttons = [
-                [InlineKeyboardButton(f"📍 {station} ({len(reports)} تقرير)", callback_data=f"view_station_{station}")]
-                for station, reports in stations_with_reports.items()
-            ]
+            # Create station buttons with report count, preserving order
+            all_stations = get_all_stations_ordered()
+            station_buttons = []
+            
+            # Only show stations that have reports
+            stations_with_reports_ordered = [station for station in all_stations if station in stations_with_reports]
+            
+            for i in range(0, len(stations_with_reports_ordered), 2):  # Two stations per row
+                row = []
+                station1 = stations_with_reports_ordered[i]
+                report_count1 = len(stations_with_reports[station1])
+                row.append(InlineKeyboardButton(f"📍 {station1} ({report_count1})", callback_data=f"view_station_{station1}"))
+                
+                if i + 1 < len(stations_with_reports_ordered):
+                    station2 = stations_with_reports_ordered[i + 1]
+                    report_count2 = len(stations_with_reports[station2])
+                    row.append(InlineKeyboardButton(f"📍 {station2} ({report_count2})", callback_data=f"view_station_{station2}"))
+                
+                station_buttons.append(row)
+            
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
             await query.edit_message_text("📋 اختر محطة لعرض التقارير:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
@@ -179,7 +224,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = f"❌ لا توجد تقارير للمحطة: {selected_station}"
             else:
                 response = f"📋 تقارير المحطة: {selected_station}\n\n"
-                for report in sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]:  # Last 10 reports
+                # Sort by timestamp (newest first) and show last 10
+                sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
+                for report in sorted_reports:
                     direction_text = "الجزائر → العفرون" if report["direction"] == DIRECTION_GO else "العفرون → الجزائر"
                     response += f"🧭 {direction_text}\n🕐 {report['time']}\n\n"
             
@@ -308,6 +355,4 @@ def main():
         raise
 
 if __name__ == '__main__':
-    # Add asyncio import at the top for the sleep function
-    import asyncio
     main()
