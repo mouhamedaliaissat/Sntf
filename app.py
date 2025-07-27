@@ -131,7 +131,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.edit_message_text("❌ حدث خطأ، يرجى المحاولة مرة أخرى.")
         except:
             pass
-
+def log_current_time():
+    utc_now = datetime.utcnow()
+    local_now = datetime.now(TIME_ZONE)
+    logging.info(f"🕐 TIME CHECK - UTC: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}, Local: {local_now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Add this line here:
+    log_current_time()
 def main():
     """Main function to run the bot"""
     # Get bot token from environment variables
