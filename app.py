@@ -1,6 +1,7 @@
 import os
 import logging
 from datetime import datetime
+import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
 from schedules import go_schedule, return_schedule
@@ -12,11 +13,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Set Algerian time zone
+ALGERIA_TZ = pytz.timezone('Africa/Algiers')
+
 # Constants
 DIRECTION_GO = "go"
 DIRECTION_RETURN = "return"
 
+# Function to get Algerian time
+def get_algerian_time():
+    return datetime.now(ALGERIA_TZ)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Log Algerian time
+    alg_time = get_algerian_time()
+    logger.info(f"🕐 ALGERIAN TIME - {alg_time.strftime('%Y-%m-%d %H:%M:%S %Z %z')}")
+    
     keyboard = [
         [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="direction_go")],
         [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")]
@@ -31,12 +43,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
 
+        # Log Algerian time on every interaction
+        alg_time = get_algerian_time()
+        logger.info(f"🕐 ALGERIAN TIME - {alg_time.strftime('%Y-%m-%d %H:%M:%S %Z %z')}")
+        logger.info(f"📱 User clicked: {query.data}")
+
         data = query.data
         
         if data == "direction_go":
             context.user_data["direction"] = DIRECTION_GO
             stations = list(go_schedule.keys())
-            # Show station buttons with back button
             station_buttons = [
                 [InlineKeyboardButton(station, callback_data=f"station_{station}")]
                 for station in stations
@@ -48,7 +64,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "direction_return":
             context.user_data["direction"] = DIRECTION_RETURN
             stations = list(return_schedule.keys())
-            # Show station buttons with back button
             station_buttons = [
                 [InlineKeyboardButton(station, callback_data=f"station_{station}")]
                 for station in stations
@@ -72,7 +87,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 schedule = return_schedule.get(station, [])
                 destination = "الجزائر"
 
-            now = datetime.now().time()
+            # Use Algerian time
+            now = get_algerian_time().time()
+            logger.info(f"⏰ Checking trains at: {now}")
             
             def str_to_time(s):
                 return datetime.strptime(s, "%H:%M").time()
@@ -93,7 +110,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station = data.split("_", 1)[1]
             context.user_data["last_station"] = station
             direction = context.user_data.get("direction")
-            now = datetime.now().time()
+            
+            # Log station selection with time
+            alg_time = get_algerian_time()
+            now = alg_time.time()
+            logger.info(f"🚉 Station: {station}, Time: {now}")
             
             def str_to_time(s):
                 return datetime.strptime(s, "%H:%M").time()
@@ -109,7 +130,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if next_train:
                 response = f"🚉 القطار الآتي من {station} إلى {destination} ينطلق على الساعة {next_train}."
-                # Add button to show all trains
                 keyboard = [
                     [InlineKeyboardButton("عرض جميع القطارات القادمة", callback_data="show_all_trains")],
                     [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
@@ -126,35 +146,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
     except Exception as e:
-        logger.error(f"Error in callback handler: {e}")
+        logger.error(f"❌ Error in callback handler: {e}")
         try:
             await update.callback_query.edit_message_text("❌ حدث خطأ، يرجى المحاولة مرة أخرى.")
         except:
             pass
-def log_current_time():
-    utc_now = datetime.utcnow()
-    local_now = datetime.now(TIME_ZONE)
-    logging.info(f"🕐 TIME CHECK - UTC: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}, Local: {local_now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
-def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Add this line here:
-    log_current_time()
+
 def main():
-    """Main function to run the bot"""
-    # Get bot token from environment variables
     token = os.getenv("BOT_TOKEN")
     if not token:
         logger.error("❌ BOT_TOKEN not set in environment variables.")
         return
 
     try:
-        # Build and run bot
+        # Log startup time
+        alg_time = get_algerian_time()
+        logger.info(f"🚀 BOT STARTUP - Algerian Time: {alg_time.strftime('%Y-%m-%d %H:%M:%S %Z %z')}")
+        
         app = ApplicationBuilder().token(token).build()
 
-        # Add handlers
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(handle_callback))
 
-        logger.info("✅ Train Schedule Bot is running on Railway...")
+        logger.info("✅ Train Schedule Bot is running with Algeria/Africa/Algiers timezone...")
         app.run_polling()
         
     except Exception as e:
