@@ -137,7 +137,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data["reports"].append(report)
             save_user_data(user_data)
             
-            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}")
+            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}")
             # Return to main menu after delay
             import asyncio
             await asyncio.sleep(2)
@@ -162,7 +162,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data["reports"].append(report)
             save_user_data(user_data)
             
-            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون → الجزائر\n🕐 الوقت: {report['time']}")
+            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}")
             # Return to main menu after delay
             import asyncio
             await asyncio.sleep(2)
