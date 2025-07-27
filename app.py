@@ -5,6 +5,7 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
 from schedules import go_schedule, return_schedule
+import json
 
 # Set up logging
 logging.basicConfig(
@@ -19,38 +20,178 @@ ALGERIA_TZ = pytz.timezone('Africa/Algiers')
 # Constants
 DIRECTION_GO = "go"
 DIRECTION_RETURN = "return"
+USER_DATA_FILE = "user_data.json"
 
 # Function to get Algerian time
 def get_algerian_time():
     return datetime.now(ALGERIA_TZ)
 
+# Function to save user data
+def save_user_data(data):
+    try:
+        with open(USER_DATA_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Error saving user data: {e}")
+
+# Function to load user data
+def load_user_data():
+    try:
+        with open(USER_DATA_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.error(f"Error loading user data: {e}")
+        return {}
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Log Algerian time
-    alg_time = get_algerian_time()
-    logger.info(f"🕐 ALGERIAN TIME - {alg_time.strftime('%Y-%m-%d %H:%M:%S %Z %z')}")
-    
     keyboard = [
-        [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="direction_go")],
-        [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")]
+        [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="direction_go")],
+        [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="direction_return")],
+        [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
+        [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
     ]
     if update.message:
-        await update.message.reply_text("👋 مرحبًا بك! اختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         query = update.callback_query
         await query.answer()
 
-        # Log Algerian time on every interaction
-        alg_time = get_algerian_time()
-        logger.info(f"🕐 ALGERIAN TIME - {alg_time.strftime('%Y-%m-%d %H:%M:%S %Z %z')}")
-        logger.info(f"📱 User clicked: {query.data}")
-
         data = query.data
         
-        if data == "direction_go":
+        # Report Train Arrival
+        if data == "report_train":
+            stations = list(set(list(go_schedule.keys()) + list(return_schedule.keys())))
+            station_buttons = [
+                [InlineKeyboardButton(station, callback_data=f"report_station_{station}")]
+                for station in stations[:10]  # Limit to 10 stations per page
+            ]
+            if len(stations) > 10:
+                # Add more stations in second column if needed
+                pass
+            station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
+            await query.edit_message_text("📍 اختر المحطة التي وصل إليها القطار:", reply_markup=InlineKeyboardMarkup(station_buttons))
+            return
+            
+        elif data.startswith("report_station_"):
+            station = data.split("_", 3)[2]
+            context.user_data["report_station"] = station
+            
+            # Choose direction
+            keyboard = [
+                [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="report_direction_go")],
+                [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="report_direction_return")],
+                [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
+            ]
+            await query.edit_message_text(f"📍 المحطة: {station}\nاختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+            
+        elif data == "report_direction_go":
+            station = context.user_data.get("report_station")
+            direction = DIRECTION_GO
+            
+            # Save report
+            user_data = load_user_data()
+            if "reports" not in user_data:
+                user_data["reports"] = []
+            
+            report = {
+                "station": station,
+                "direction": direction,
+                "time": get_algerian_time().strftime('%Y-%m-%d %H:%M:%S'),
+                "timestamp": get_algerian_time().timestamp()
+            }
+            user_data["reports"].append(report)
+            save_user_data(user_data)
+            
+            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}")
+            # Show main menu after 3 seconds
+            await asyncio.sleep(3)
+            await start(update, context)
+            return
+            
+        elif data == "report_direction_return":
+            station = context.user_data.get("report_station")
+            direction = DIRECTION_RETURN
+            
+            # Save report
+            user_data = load_user_data()
+            if "reports" not in user_data:
+                user_data["reports"] = []
+            
+            report = {
+                "station": station,
+                "direction": direction,
+                "time": get_algerian_time().strftime('%Y-%m-%d %H:%M:%S'),
+                "timestamp": get_algerian_time().timestamp()
+            }
+            user_data["reports"].append(report)
+            save_user_data(user_data)
+            
+            await query.edit_message_text(f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون → الجزائر\n🕐 الوقت: {report['time']}")
+            # Show main menu after 3 seconds
+            await asyncio.sleep(3)
+            await start(update, context)
+            return
+            
+        # View Reports
+        elif data == "view_reports":
+            user_data = load_user_data()
+            reports = user_data.get("reports", [])
+            
+            if not reports:
+                response = "❌ لا توجد تقارير محفوظة."
+                keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
+                await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
+                return
+            
+            # Group reports by station
+            stations_with_reports = {}
+            for report in reports:
+                station = report["station"]
+                if station not in stations_with_reports:
+                    stations_with_reports[station] = []
+                stations_with_reports[station].append(report)
+            
+            # Create station buttons
+            station_buttons = [
+                [InlineKeyboardButton(f"📍 {station} ({len(reports)} تقرير)", callback_data=f"view_station_{station}")]
+                for station, reports in stations_with_reports.items()
+            ]
+            station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
+            await query.edit_message_text("📋 اختر محطة لعرض التقارير:", reply_markup=InlineKeyboardMarkup(station_buttons))
+            return
+            
+        elif data.startswith("view_station_"):
+            selected_station = data.split("_", 2)[2]
+            user_data = load_user_data()
+            reports = user_data.get("reports", [])
+            
+            # Filter reports by station
+            station_reports = [r for r in reports if r["station"] == selected_station]
+            
+            if not station_reports:
+                response = f"❌ لا توجد تقارير للمحطة: {selected_station}"
+            else:
+                response = f"📋 تقارير المحطة: {selected_station}\n\n"
+                for report in sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]:  # Last 10 reports
+                    direction_text = "الجزائر → العفرون" if report["direction"] == DIRECTION_GO else "العفرون → الجزائر"
+                    response += f"🧭 {direction_text}\n🕐 {report['time']}\n\n"
+            
+            keyboard = [
+                [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
+                [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
+            ]
+            await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+            
+        # Original functionality
+        elif data == "direction_go":
             context.user_data["direction"] = DIRECTION_GO
             stations = list(go_schedule.keys())
             station_buttons = [
@@ -87,9 +228,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 schedule = return_schedule.get(station, [])
                 destination = "الجزائر"
 
-            # Use Algerian time
             now = get_algerian_time().time()
-            logger.info(f"⏰ Checking trains at: {now}")
             
             def str_to_time(s):
                 return datetime.strptime(s, "%H:%M").time()
@@ -111,10 +250,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["last_station"] = station
             direction = context.user_data.get("direction")
             
-            # Log station selection with time
-            alg_time = get_algerian_time()
-            now = alg_time.time()
-            logger.info(f"🚉 Station: {station}, Time: {now}")
+            now = get_algerian_time().time()
             
             def str_to_time(s):
                 return datetime.strptime(s, "%H:%M").time()
@@ -146,7 +282,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
     except Exception as e:
-        logger.error(f"❌ Error in callback handler: {e}")
+        logger.error(f"Error in callback handler: {e}")
         try:
             await update.callback_query.edit_message_text("❌ حدث خطأ، يرجى المحاولة مرة أخرى.")
         except:
@@ -159,16 +295,12 @@ def main():
         return
 
     try:
-        # Log startup time
-        alg_time = get_algerian_time()
-        logger.info(f"🚀 BOT STARTUP - Algerian Time: {alg_time.strftime('%Y-%m-%d %H:%M:%S %Z %z')}")
-        
         app = ApplicationBuilder().token(token).build()
 
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CallbackQueryHandler(handle_callback))
 
-        logger.info("✅ Train Schedule Bot is running with Algeria/Africa/Algiers timezone...")
+        logger.info("✅ Train Schedule Bot is running with Algeria timezone...")
         app.run_polling()
         
     except Exception as e:
@@ -176,4 +308,6 @@ def main():
         raise
 
 if __name__ == '__main__':
+    # Add asyncio import at the top for the sleep function
+    import asyncio
     main()
