@@ -43,7 +43,7 @@ def init_mongodb():
     try:
         logger.info(f"🔧 Attempting to connect to MongoDB...")
         logger.info(f"🔗 URI: {MONGODB_URI[:30]}...{MONGODB_URI[-20:] if len(MONGODB_URI) > 50 else MONGODB_URI}")
-        
+        logger.info(f"MONGODB_URI is: {MONGODB_URI}")
         # Create client with timeout settings
         client = MongoClient(
             MONGODB_URI, 
