@@ -540,7 +540,7 @@ def main():
     try:
         logger.info(f"📊 MongoDB Status at startup: {'🟢 Available' if MONGO_AVAILABLE else '🔴 Not Available'}")
         
-        if MONGO_AVAILABLE and reports_collection:
+        if MONGO_AVAILABLE and reports_collection is not None:
             try:
                 count = reports_collection.count_documents({})
                 logger.info(f"📈 Current reports in database: {count}")
