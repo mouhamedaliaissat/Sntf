@@ -7,7 +7,6 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 from schedules import go_schedule, return_schedule
 from pymongo import MongoClient, errors
 import asyncio
-import json
 
 # Set up logging
 logging.basicConfig(
@@ -125,7 +124,7 @@ def save_report_to_db(report_data):
             logger.info("📤 Inserting document into MongoDB...")
             result = reports_collection.insert_one(report_data)
             logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
-            return str(result.inserted_id)  # Return the ID
+            return str(result.inserted_id)  # Return the ID as string
         else:
             logger.warning("⚠️ MongoDB collection not available for saving")
             return None
@@ -253,8 +252,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"🎮 Callback received: {query.data}")
         data = query.data
         
+        # Handle delete report request
+        if data.startswith("delete_report_"):
+            report_id = data.split("_", 2)[2]
+            
+            # Show confirmation dialog
+            keyboard = [
+                [InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_{report_id}")],
+                [InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_delete_{report_id}")]
+            ]
+            await query.edit_message_text("⚠️ هل أنت متأكد أنك تريد حذف هذا التقرير؟", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+            
         # Handle delete report confirmation
-        if data.startswith("confirm_delete_"):
+        elif data.startswith("confirm_delete_"):
             report_id = data.split("_", 2)[2]
             # Delete the report
             success = delete_report_from_db(report_id)
@@ -298,18 +309,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"❌ Error retrieving report: {e}")
                 await query.edit_message_text("❌ حدث خطأ أثناء استرجاع التقرير.")
-            return
-            
-        # Handle delete report request
-        elif data.startswith("delete_report_"):
-            report_id = data.split("_", 2)[2]
-            
-            # Show confirmation dialog
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_{report_id}")],
-                [InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_delete_{report_id}")]
-            ]
-            await query.edit_message_text("⚠️ هل أنت متأكد أنك تريد حذف هذا التقرير؟", reply_markup=InlineKeyboardMarkup(keyboard))
             return
             
         # Report Train Arrival
@@ -445,16 +444,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not station_reports:
                 response = f"❌ لا توجد تقارير للمحطة: {selected_station}"
             else:
-                response = f"📋 تقارير المحطة: {selected_station}\n"
+                response = f"📋 تقارير المحطة: {selected_station}\n\n"
                 # Sort by timestamp (newest first)
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)
                 for i, report in enumerate(sorted_reports[:10]):  # Show first 10 reports
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                    response += f"\n{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
+                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
                     
                     # Add delete button for each report
                     report_id = str(report['_id'])
-                    response += f"   [🗑️ حذف](callback_data='delete_report_{report_id}')\n"
+                    response += f"   [🗑️ حذف](callback_data='delete_report_{report_id}')\n\n"
             
             keyboard = [
                 [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
