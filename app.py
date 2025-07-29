@@ -149,7 +149,7 @@ def save_report_to_db(report_data):
 def get_all_reports_from_db():
     logger.info("📥 Retrieving all reports from database...")
     try:
-        if reports_collection:
+        if reports_collection is not None:
             reports = list(reports_collection.find())
             logger.info(f"📊 Retrieved {len(reports)} reports from database")
             return reports
@@ -164,7 +164,7 @@ def get_all_reports_from_db():
 def get_reports_by_station_from_db(station):
     logger.info(f"📥 Retrieving reports for station: {station}")
     try:
-        if reports_collection:
+        if reports_collection is not None:
             reports = list(reports_collection.find({"station": station}))
             logger.info(f"📊 Retrieved {len(reports)} reports for station {station}")
             return reports
