@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
@@ -123,11 +123,14 @@ def get_algerian_time():
 def save_report_to_db(report_data):
     logger.info(f"💾 Attempting to save report to database: {report_data}")
     try:
-        # Initialize votes if not present
+        # Ensure user_ratings dict exists
+        if "user_ratings" not in report_data:
+            report_data["user_ratings"] = {}
         if "upvotes" not in report_data:
-             report_data["upvotes"] = 0
+            report_data["upvotes"] = 0
         if "downvotes" not in report_data:
-             report_data["downvotes"] = 0
+            report_data["downvotes"] = 0
+            
         if reports_collection is not None:
             logger.info("📤 Inserting document into MongoDB...")
             result = reports_collection.insert_one(report_data)
@@ -160,8 +163,20 @@ def get_reports_by_station_from_db(station):
     logger.info(f"📥 Retrieving reports for station: {station}")
     try:
         if reports_collection is not None:
-            reports = list(reports_collection.find({"station": station}))
-            logger.info(f"📊 Retrieved {len(reports)} reports for station {station}")
+            # Get today's date in Algeria timezone
+            today = datetime.now(ALGERIA_TZ).date()
+            # Create datetime objects for start and end of today
+            start_of_day = datetime.combine(today, datetime.min.time()).replace(tzinfo=ALGERIA_TZ)
+            end_of_day = datetime.combine(today, datetime.max.time()).replace(tzinfo=ALGERIA_TZ)
+            
+            reports = list(reports_collection.find({
+                "station": station,
+                "timestamp": {
+                    "$gte": start_of_day.timestamp(),
+                    "$lte": end_of_day.timestamp()
+                }
+            }))
+            logger.info(f"📊 Retrieved {len(reports)} reports for station {station} on {today}")
             return reports
         else:
             logger.warning("⚠️ MongoDB collection not available for reading")
@@ -172,13 +187,46 @@ def get_reports_by_station_from_db(station):
         return []
 
 # --- NEW RATING FUNCTIONS ---
-def update_vote_in_db(report_id, vote_type, increment=1):
+def has_user_rated(report_id, user_id):
+    """Check if a user has already rated a report."""
+    try:
+        if reports_collection is not None:
+            from bson import ObjectId
+            report = reports_collection.find_one(
+                {"_id": ObjectId(report_id)},
+                {"user_ratings": 1} # Only fetch the user_ratings field
+            )
+            if report and "user_ratings" in report:
+                return str(user_id) in report["user_ratings"]
+        return False
+    except Exception as e:
+        logger.error(f"❌ Error checking user rating: {e}")
+        logger.exception(e)
+        return False # Assume not rated on error
+
+def get_user_rating(report_id, user_id):
+    """Get a user's specific rating for a report."""
+    try:
+        if reports_collection is not None:
+            from bson import ObjectId
+            report = reports_collection.find_one(
+                {"_id": ObjectId(report_id)},
+                {"user_ratings": 1}
+            )
+            if report and "user_ratings" in report:
+                return report["user_ratings"].get(str(user_id))
+        return None
+    except Exception as e:
+        logger.error(f"❌ Error getting user rating: {e}")
+        logger.exception(e)
+        return None
+
+def update_rating_in_db(report_id, user_id, new_rating):
     """
-    Update upvotes or downvotes for a report.
-    vote_type: 'upvote' or 'downvote'
-    increment: +1 to add, -1 to remove
+    Update a user's rating for a report and adjust vote counts.
+    new_rating: 'up' or 'down'
     """
-    logger.info(f"🗳️ Updating {vote_type} for report {report_id} by {increment}")
+    logger.info(f"🗳️ Updating rating for report {report_id} by user {user_id} to '{new_rating}'")
     try:
         if reports_collection is not None:
             from bson import ObjectId
@@ -186,22 +234,53 @@ def update_vote_in_db(report_id, vote_type, increment=1):
                 logger.error(f"❌ Invalid ObjectId format: {report_id}")
                 return False
 
-            field = "upvotes" if vote_type == "upvote" else "downvotes"
+            # Get the current rating for the user (if any)
+            current_rating = get_user_rating(report_id, user_id)
+            logger.info(f"   Current rating for user {user_id}: {current_rating}")
+
+            # Prepare update operations
+            update_ops = {
+                "$set": {f"user_ratings.{user_id}": new_rating}
+            }
+
+            # Adjust vote counts based on the change
+            vote_updates = {}
+            if current_rating == 'up' and new_rating == 'down':
+                # Change from up to down
+                vote_updates["upvotes"] = -1
+                vote_updates["downvotes"] = 1
+            elif current_rating == 'down' and new_rating == 'up':
+                # Change from down to up
+                vote_updates["upvotes"] = 1
+                vote_updates["downvotes"] = -1
+            elif current_rating is None and new_rating == 'up':
+                # New upvote
+                vote_updates["upvotes"] = 1
+            elif current_rating is None and new_rating == 'down':
+                # New downvote
+                vote_updates["downvotes"] = 1
+            # If current_rating == new_rating, no change needed for votes
+
+            if vote_updates:
+                update_ops["$inc"] = vote_updates
+
+            logger.info(f"   Update operations: {update_ops}")
+
             result = reports_collection.update_one(
                 {"_id": ObjectId(report_id)},
-                {"$inc": {field: increment}}
+                update_ops
             )
             if result.modified_count > 0:
-                logger.info(f"✅ Successfully updated {vote_type} for report {report_id}")
+                logger.info(f"✅ Successfully updated rating for report {report_id}")
                 return True
             else:
-                logger.warning(f"⚠️ No report found or no change for {vote_type} on report {report_id}")
+                logger.warning(f"⚠️ No report found or no change for rating on report {report_id}")
                 return False
         else:
-            logger.warning("⚠️ MongoDB collection not available for updating votes")
+            logger.warning("⚠️ MongoDB collection not available for updating ratings")
             return False
     except Exception as e:
-        logger.error(f"❌ Error updating vote in MongoDB: {e}")
+        logger.error(f"❌ Error updating rating in MongoDB: {e}")
         logger.exception(e)
         return False
 
@@ -278,57 +357,57 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Handle upvote
         if data.startswith("rate_up_"):
             report_id = data.split("_", 2)[2]
-            logger.info(f"👍 User {user_id} upvoted report {report_id}")
-            success = update_vote_in_db(report_id, "upvote", 1)
+            logger.info(f"👍 User {user_id} rated report {report_id} as up")
+            
+            # Update rating in DB
+            success = update_rating_in_db(report_id, user_id, 'up')
             if success:
-                 # Refresh the view to show updated counts
-                 # We need to find the station for this report to refresh the view
-                 try:
-                     from bson import ObjectId
-                     report = reports_collection.find_one({"_id": ObjectId(report_id)})
-                     if report and "station" in report:
-                         # Re-display the station reports view
-                         # Store current data in context for refresh
-                         context.user_data['last_rated_station'] = report['station']
-                         # Trigger a refresh by calling the view_station handler logic
-                         # Simple way: just re-edit the message with the same station view
-                         # You might want a more elegant refresh mechanism
-                         data = f"view_station_{report['station']}" # Simulate the callback
-                         # Fall through to the view_station handler below
-                     else:
-                          await query.answer("حدث خطأ في تحديث التصويت.")
-                          return
-                 except Exception as e:
-                     logger.error(f"Error finding report for refresh: {e}")
-                     await query.answer("حدث خطأ في تحديث التصويت.")
-                     return
+                await query.answer("تم التقييم بـ ✅")
+                # Refresh the view by re-triggering the view_station callback
+                # Find the station for this report
+                try:
+                    from bson import ObjectId
+                    report = reports_collection.find_one({"_id": ObjectId(report_id)}, {"station": 1})
+                    if report and "station" in report:
+                        # Re-display the station reports view
+                        data = f"view_station_{report['station']}"
+                        # Fall through to the view_station handler below
+                    else:
+                        await query.answer("حدث خطأ في تحديث التصويت.")
+                        return
+                except Exception as e:
+                    logger.error(f"Error finding report for refresh: {e}")
+                    await query.answer("حدث خطأ في تحديث التصويت.")
+                    return
             else:
-                 await query.answer("فشل في تسجيل التصويت.")
-                 return # Don't proceed if DB update failed
+                await query.answer("فشل في تسجيل التصويت.")
+                return
 
         # Handle downvote
         elif data.startswith("rate_down_"):
             report_id = data.split("_", 3)[2]
-            logger.info(f"👎 User {user_id} downvoted report {report_id}")
-            success = update_vote_in_db(report_id, "downvote", 1)
+            logger.info(f"👎 User {user_id} rated report {report_id} as down")
+            
+            # Update rating in DB
+            success = update_rating_in_db(report_id, user_id, 'down')
             if success:
-                 # Refresh the view (same logic as upvote)
-                 try:
-                     from bson import ObjectId
-                     report = reports_collection.find_one({"_id": ObjectId(report_id)})
-                     if report and "station" in report:
-                         context.user_data['last_rated_station'] = report['station']
-                         data = f"view_station_{report['station']}"
-                     else:
-                          await query.answer("حدث خطأ في تحديث التصويت.")
-                          return
-                 except Exception as e:
-                     logger.error(f"Error finding report for refresh: {e}")
-                     await query.answer("حدث خطأ في تحديث التصويت.")
-                     return
+                await query.answer("تم التقييم بـ ❌")
+                # Refresh the view
+                try:
+                    from bson import ObjectId
+                    report = reports_collection.find_one({"_id": ObjectId(report_id)}, {"station": 1})
+                    if report and "station" in report:
+                        data = f"view_station_{report['station']}"
+                    else:
+                        await query.answer("حدث خطأ في تحديث التصويت.")
+                        return
+                except Exception as e:
+                    logger.error(f"Error finding report for refresh: {e}")
+                    await query.answer("حدث خطأ في تحديث التصويت.")
+                    return
             else:
-                 await query.answer("فشل في تسجيل التصويت.")
-                 return # Don't proceed if DB update failed
+                await query.answer("فشل في تسجيل التصويت.")
+                return
         # --- END NEW RATING FUNCTIONALITY ---
 
         # Report Train Arrival
@@ -369,8 +448,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "direction": direction,
                 "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": alg_time.timestamp(),
-                "user_id": user_id, # Store the user ID who created the report
-                "upvotes": 0,       # Initialize votes
+                "user_ratings": {},  # Initialize user ratings
+                "upvotes": 0,
                 "downvotes": 0
             }
             logger.info(f"📝 Report data: {report}")
@@ -396,8 +475,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "direction": direction,
                 "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": alg_time.timestamp(),
-                "user_id": user_id, # Store the user ID who created the report
-                "upvotes": 0,       # Initialize votes
+                "user_ratings": {},  # Initialize user ratings
+                "upvotes": 0,
                 "downvotes": 0
             }
             logger.info(f"📝 Report data: {report}")
@@ -479,19 +558,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
                     upvotes = report.get("upvotes", 0)
                     downvotes = report.get("downvotes", 0)
-                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
-
-                    # Add rating buttons if the user is NOT the creator
                     report_id = str(report['_id'])
-                    report_creator_id = str(report.get('user_id', ''))
-                    if user_id != report_creator_id:
-                        # Add rating buttons on their own line
-                        keyboard.append([
-                            InlineKeyboardButton(f"{UPVOTE_EMOJI} {upvotes}", callback_data=f'rate_up_{report_id}'),
-                            InlineKeyboardButton(f"{DOWNVOTE_EMOJI} {downvotes}", callback_data=f'rate_down_{report_id}')
-                        ])
+                    
+                    # Format time to HH:MM only
+                    report_time_obj = datetime.fromtimestamp(report['timestamp'], ALGERIA_TZ)
+                    formatted_time = report_time_obj.strftime('%H:%M')
+                    
+                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {formatted_time}\n"
+
+                    # Check if user has already rated this report
+                    user_rating = get_user_rating(report_id, user_id)
+                    
+                    if user_rating is not None:
+                        # User has rated, show their rating
+                        rating_emoji = UPVOTE_EMOJI if user_rating == 'up' else DOWNVOTE_EMOJI
+                        response += f"   (تم التقييم بـ {rating_emoji})\n"
                     else:
-                        response += f"   (تقريرك - {UPVOTE_EMOJI} {upvotes} {DOWNVOTE_EMOJI} {downvotes})\n"
+                        # User hasn't rated, show rating buttons
+                        keyboard.append([
+                            InlineKeyboardButton(f"{UPVOTE_EMOJI} ({upvotes})", callback_data=f'rate_up_{report_id}'),
+                            InlineKeyboardButton(f"{DOWNVOTE_EMOJI} ({downvotes})", callback_data=f'rate_down_{report_id}')
+                        ])
                     response += "\n" # Add space after each report block
 
                 # Add navigation buttons at the end
