@@ -239,8 +239,8 @@ async def debug_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("🏠 Start command received")
     keyboard = [
-        [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="direction_go")],
-        [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="direction_return")],
+        [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="direction_go")],
+        [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")],
         [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
         [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
     ]
@@ -281,8 +281,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"📍 User selected station: {station}")
             
             keyboard = [
-                [InlineKeyboardButton("🚆 الجزائر → العفرون", callback_data="report_direction_go")],
-                [InlineKeyboardButton("🚆 العفرون → الجزائر", callback_data="report_direction_return")],
+                [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="report_direction_go")],
+                [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="report_direction_return")],
                 [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
             ]
             await query.edit_message_text(f"📍 المحطة: {station}\nاختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -306,10 +306,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             success = save_report_to_db(report)
             
             if success:
-                response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}"
+                response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}"
                 logger.info(f"🎉 Report saved successfully for {station}")
             else:
-                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر → العفرون\n🕐 الوقت: {report['time']}\n\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
+                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}\n\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
                 logger.error(f"💥 Failed to save report for {station}")
             
             await query.edit_message_text(response_text)
@@ -335,10 +335,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             success = save_report_to_db(report)
             
             if success:
-                response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون → الجزائر\n🕐 الوقت: {report['time']}"
+                response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}"
                 logger.info(f"🎉 Report saved successfully for {station}")
             else:
-                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون → الجزائر\n🕐 الوقت: {report['time']}\n\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
+                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}\n\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
                 logger.error(f"💥 Failed to save report for {station}")
             
             await query.edit_message_text(response_text)
@@ -420,7 +420,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = f"📋 تقارير المحطة: {selected_station}\n\n"
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
                 for report in sorted_reports:
-                    direction_text = "الجزائر → العفرون" if report["direction"] == DIRECTION_GO else "العفرون → الجزائر"
+                    direction_text = "الجزائر → العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
                     response += f"🧭 {direction_text}\n🕐 {report['time']}\n\n"
             
             keyboard = [
