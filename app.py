@@ -7,6 +7,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 from schedules import go_schedule, return_schedule
 from pymongo import MongoClient, errors
 import asyncio
+import json
 
 # Set up logging
 logging.basicConfig(
@@ -35,11 +36,9 @@ MONGO_AVAILABLE = False
 def init_mongodb():
     global client, reports_collection, MONGO_AVAILABLE
     logger.info("🔧 Starting MongoDB initialization...")
-    
     if not MONGODB_URI:
         logger.error("❌ MONGODB_URI environment variable not set")
         return False
-    
     try:
         logger.info(f"🔧 Attempting to connect to MongoDB...")
         logger.info(f"🔗 URI: {MONGODB_URI[:30]}...{MONGODB_URI[-20:] if len(MONGODB_URI) > 50 else MONGODB_URI}")
@@ -51,17 +50,14 @@ def init_mongodb():
             connectTimeoutMS=5000,
             socketTimeoutMS=5000
         )
-        
         # Test the connection
         logger.info("🔍 Testing MongoDB connection...")
         client.admin.command('ping')
         logger.info("✅ MongoDB ping successful")
-        
         # Access database and collection
         db = client[DB_NAME]
         reports_collection = db[COLLECTION_NAME]
         logger.info(f"📚 Using database: {DB_NAME}, collection: {COLLECTION_NAME}")
-        
         # Test insert to verify everything works
         test_doc = {
             "test": "connection",
@@ -71,15 +67,12 @@ def init_mongodb():
         logger.info("📝 Testing document insertion...")
         result = reports_collection.insert_one(test_doc)
         logger.info(f"✅ Test document inserted with ID: {result.inserted_id}")
-        
         # Clean up test document
         reports_collection.delete_one({"_id": result.inserted_id})
         logger.info("🧹 Test document cleaned up")
-        
         MONGO_AVAILABLE = True
         logger.info("🎉 MongoDB initialization completed successfully")
         return True
-        
     except errors.ServerSelectionTimeoutError as e:
         logger.error(f"❌ MongoDB connection timeout: {e}")
         logger.error("💡 Check your internet connection and MongoDB URI")
@@ -95,7 +88,6 @@ def init_mongodb():
     except Exception as e:
         logger.error(f"❌ Unexpected error during MongoDB initialization: {e}")
         logger.exception(e)
-    
     return False
 
 # Initialize MongoDB on startup
@@ -108,22 +100,18 @@ def get_all_stations_ordered():
     logger.info("📋 Getting all stations in order...")
     go_stations = list(go_schedule.keys())
     return_stations = list(return_schedule.keys())
-    
     all_stations = []
     seen = set()
-    
     # Add stations from go_schedule first
     for station in go_stations:
         if station not in seen:
             all_stations.append(station)
             seen.add(station)
-    
     # Add stations from return_schedule
     for station in return_stations:
         if station not in seen:
             all_stations.append(station)
             seen.add(station)
-    
     logger.info(f"📊 Total stations found: {len(all_stations)}")
     return all_stations
 
@@ -137,14 +125,14 @@ def save_report_to_db(report_data):
             logger.info("📤 Inserting document into MongoDB...")
             result = reports_collection.insert_one(report_data)
             logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
-            return True
+            return str(result.inserted_id)  # Return the ID
         else:
             logger.warning("⚠️ MongoDB collection not available for saving")
-            return False
+            return None
     except Exception as e:
         logger.error(f"❌ Error saving report to MongoDB: {e}")
         logger.exception(e)
-        return False
+        return None
 
 def get_all_reports_from_db():
     logger.info("📥 Retrieving all reports from database...")
@@ -176,61 +164,70 @@ def get_reports_by_station_from_db(station):
         logger.exception(e)
         return []
 
+def delete_report_from_db(report_id):
+    """Delete a report by its MongoDB ID"""
+    logger.info(f"🗑️ Attempting to delete report with ID: {report_id}")
+    try:
+        if reports_collection is not None:
+            from bson import ObjectId
+            result = reports_collection.delete_one({"_id": ObjectId(report_id)})
+            if result.deleted_count > 0:
+                logger.info(f"✅ Successfully deleted report with ID: {report_id}")
+                return True
+            else:
+                logger.warning(f"⚠️ No report found with ID: {report_id}")
+                return False
+        else:
+            logger.warning("⚠️ MongoDB collection not available for deletion")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Error deleting report from MongoDB: {e}")
+        logger.exception(e)
+        return False
+
 # Debug command
 async def debug_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to check database status"""
     logger.info("🔍 Debug command received")
-    
     if not MONGO_AVAILABLE:
         response = "❌ MongoDB not available\n"
         response += "Check Railway logs for connection errors"
         await update.message.reply_text(response)
         logger.warning("⚠️ Debug command: MongoDB not available")
         return
-    
     try:
         logger.info("🔍 Performing debug checks...")
-        
         # Check connection
         logger.info("🔍 Testing MongoDB connection...")
         client.admin.command('ping')
         logger.info("✅ MongoDB connection test successful")
-        
         # Get database info
         logger.info("🔍 Getting database information...")
         db_names = client.list_database_names()
         logger.info(f"📊 Available databases: {db_names}")
-        
         collection_names = reports_collection.database.list_collection_names()
         logger.info(f"📂 Available collections: {collection_names}")
-        
         # Get report count
         logger.info("🔍 Counting reports...")
         report_count = reports_collection.count_documents({})
         logger.info(f"📈 Total reports in database: {report_count}")
-        
         # Get sample reports
         logger.info("🔍 Getting sample reports...")
         sample_reports = list(reports_collection.find().limit(3))
         logger.info(f"📋 Sample reports retrieved: {len(sample_reports)}")
-        
-        response = "✅ Database Debug Information:\n\n"
+        response = "✅ Database Debug Information:\n"
         response += f"📊 Databases: {db_names}\n"
         response += f"📂 Collections: {collection_names}\n"
-        response += f"📈 Total Reports: {report_count}\n\n"
-        
+        response += f"📈 Total Reports: {report_count}\n"
         if sample_reports:
             response += "📋 Recent Reports:\n"
             for i, report in enumerate(sample_reports[:3]):
                 response += f"{i+1}. {report.get('station', 'N/A')} - {report.get('direction', 'N/A')} - {report.get('time', 'N/A')}\n"
         else:
-            response += "📭 No reports found\n\n"
-        
+            response += "📭 No reports found\n"
         response += "🔧 MongoDB Status: Connected ✅"
-        
         await update.message.reply_text(response)
         logger.info("✅ Debug command completed successfully")
-        
     except Exception as e:
         logger.error(f"❌ Debug command error: {e}")
         logger.exception(e)
@@ -254,15 +251,72 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         logger.info(f"🎮 Callback received: {query.data}")
-
         data = query.data
         
+        # Handle delete report confirmation
+        if data.startswith("confirm_delete_"):
+            report_id = data.split("_", 2)[2]
+            # Delete the report
+            success = delete_report_from_db(report_id)
+            if success:
+                response_text = "✅ تم حذف التقرير بنجاح!"
+            else:
+                response_text = "❌ فشل في حذف التقرير. قد يكون التقرير غير موجود."
+            
+            await query.edit_message_text(response_text)
+            # Return to main menu after delay
+            await asyncio.sleep(2)
+            await start(update, context)
+            return
+            
+        # Handle delete report cancellation
+        elif data.startswith("cancel_delete_"):
+            report_id = data.split("_", 2)[2]
+            # Show the report details again
+            if not MONGO_AVAILABLE or reports_collection is None:
+                await query.edit_message_text("❌ قاعدة البيانات غير متوفرة.")
+                return
+                
+            try:
+                from bson import ObjectId
+                report = reports_collection.find_one({"_id": ObjectId(report_id)})
+                if report:
+                    direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
+                    response = f"📋 تفاصيل التقرير:\n"
+                    response += f"📍 المحطة: {report['station']}\n"
+                    response += f"🧭 الاتجاه: {direction_text}\n"
+                    response += f"🕐 الوقت: {report['time']}\n\n"
+                    
+                    # Add delete button
+                    keyboard = [
+                        [InlineKeyboardButton("🗑️ حذف التقرير", callback_data=f"delete_report_{report_id}")],
+                        [InlineKeyboardButton("⬅️ العودة", callback_data="view_reports")]
+                    ]
+                    await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
+                else:
+                    await query.edit_message_text("❌ التقرير غير موجود.")
+            except Exception as e:
+                logger.error(f"❌ Error retrieving report: {e}")
+                await query.edit_message_text("❌ حدث خطأ أثناء استرجاع التقرير.")
+            return
+            
+        # Handle delete report request
+        elif data.startswith("delete_report_"):
+            report_id = data.split("_", 2)[2]
+            
+            # Show confirmation dialog
+            keyboard = [
+                [InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_{report_id}")],
+                [InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_delete_{report_id}")]
+            ]
+            await query.edit_message_text("⚠️ هل أنت متأكد أنك تريد حذف هذا التقرير؟", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+            
         # Report Train Arrival
         if data == "report_train":
             logger.info("📝 User selected to report train arrival")
             stations = get_all_stations_ordered()
             logger.info(f"📊 Showing {len(stations)} stations for reporting")
-            
             station_buttons = []
             for i in range(0, len(stations), 2):
                 row = []
@@ -270,7 +324,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if i + 1 < len(stations):
                     row.append(InlineKeyboardButton(stations[i + 1], callback_data=f"report_station_{stations[i + 1]}"))
                 station_buttons.append(row)
-            
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
             await query.edit_message_text("📍 اختر المحطة التي وصل إليها القطار:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
@@ -279,7 +332,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station = data.split("_", 2)[2]
             context.user_data["report_station"] = station
             logger.info(f"📍 User selected station: {station}")
-            
             keyboard = [
                 [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="report_direction_go")],
                 [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="report_direction_return")],
@@ -291,9 +343,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "report_direction_go":
             station = context.user_data.get("report_station")
             direction = DIRECTION_GO
-            
             logger.info(f"📤 Saving report - Station: {station}, Direction: {direction}")
-            
             alg_time = get_algerian_time()
             report = {
                 "station": station,
@@ -301,17 +351,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": alg_time.timestamp()
             }
-            
             logger.info(f"📝 Report data: {report}")
-            success = save_report_to_db(report)
-            
-            if success:
+            report_id = save_report_to_db(report)  # Get the report ID
+            if report_id:
                 response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}"
-                logger.info(f"🎉 Report saved successfully for {station}")
+                logger.info(f"🎉 Report saved successfully for {station} with ID: {report_id}")
             else:
-                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}\n\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
+                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
                 logger.error(f"💥 Failed to save report for {station}")
-            
             await query.edit_message_text(response_text)
             await asyncio.sleep(3)
             await start(update, context)
@@ -320,9 +367,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "report_direction_return":
             station = context.user_data.get("report_station")
             direction = DIRECTION_RETURN
-            
             logger.info(f"📤 Saving report - Station: {station}, Direction: {direction}")
-            
             alg_time = get_algerian_time()
             report = {
                 "station": station,
@@ -330,17 +375,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": alg_time.timestamp()
             }
-            
             logger.info(f"📝 Report data: {report}")
-            success = save_report_to_db(report)
-            
-            if success:
+            report_id = save_report_to_db(report)  # Get the report ID
+            if report_id:
                 response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}"
-                logger.info(f"🎉 Report saved successfully for {station}")
+                logger.info(f"🎉 Report saved successfully for {station} with ID: {report_id}")
             else:
-                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}\n\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
+                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
                 logger.error(f"💥 Failed to save report for {station}")
-            
             await query.edit_message_text(response_text)
             await asyncio.sleep(3)
             await start(update, context)
@@ -349,55 +391,44 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # View Reports
         elif data == "view_reports":
             logger.info("📋 User requested to view reports")
-            
             if not MONGO_AVAILABLE:
                 response = "❌ قاعدة البيانات غير متوفرة حالياً."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 logger.warning("⚠️ View reports: MongoDB not available")
                 return
-            
             reports = get_all_reports_from_db()
             logger.info(f"📊 Found {len(reports)} total reports")
-            
             if not reports:
                 response = "❌ لا توجد تقارير محفوظة."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 return
-            
             stations_with_reports = {}
             for report in reports:
                 station = report["station"]
                 if station not in stations_with_reports:
                     stations_with_reports[station] = []
                 stations_with_reports[station].append(report)
-            
             all_stations = get_all_stations_ordered()
             station_buttons = []
-            
             stations_with_reports_ordered = [station for station in all_stations if station in stations_with_reports]
             logger.info(f"📊 Stations with reports: {len(stations_with_reports_ordered)}")
-            
             if not stations_with_reports_ordered:
                 response = "❌ لا توجد تقارير محفوظة."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 return
-            
             for i in range(0, len(stations_with_reports_ordered), 2):
                 row = []
                 station1 = stations_with_reports_ordered[i]
                 report_count1 = len(stations_with_reports[station1])
                 row.append(InlineKeyboardButton(f"📍 {station1} ({report_count1})", callback_data=f"view_station_{station1}"))
-                
                 if i + 1 < len(stations_with_reports_ordered):
                     station2 = stations_with_reports_ordered[i + 1]
                     report_count2 = len(stations_with_reports[station2])
                     row.append(InlineKeyboardButton(f"📍 {station2} ({report_count2})", callback_data=f"view_station_{station2}"))
-                
                 station_buttons.append(row)
-            
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
             await query.edit_message_text("📋 اختر محطة لعرض التقارير:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
@@ -405,23 +436,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("view_station_"):
             selected_station = data.split("_", 2)[2]
             logger.info(f"🔍 User viewing reports for station: {selected_station}")
-            
             if not MONGO_AVAILABLE:
                 response = "❌ قاعدة البيانات غير متوفرة حالياً."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 return
-            
             station_reports = get_reports_by_station_from_db(selected_station)
-            
             if not station_reports:
                 response = f"❌ لا توجد تقارير للمحطة: {selected_station}"
             else:
-                response = f"📋 تقارير المحطة: {selected_station}\n\n"
-                sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
-                for report in sorted_reports:
+                response = f"📋 تقارير المحطة: {selected_station}\n"
+                # Sort by timestamp (newest first)
+                sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)
+                for i, report in enumerate(sorted_reports[:10]):  # Show first 10 reports
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                    response += f"🧭 {direction_text}\n🕐 {report['time']}\n\n"
+                    response += f"\n{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
+                    
+                    # Add delete button for each report
+                    report_id = str(report['_id'])
+                    response += f"   [🗑️ حذف](callback_data='delete_report_{report_id}')\n"
             
             keyboard = [
                 [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
@@ -460,27 +493,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "show_all_trains":
             station = context.user_data.get("last_station")
             direction = context.user_data.get("direction")
-            
             if direction == DIRECTION_GO:
                 schedule = go_schedule.get(station, [])
                 destination = "العفرون"
             else:
                 schedule = return_schedule.get(station, [])
                 destination = "الجزائر"
-
             now = get_algerian_time().time()
-            
             def str_to_time(s):
                 return datetime.strptime(s, "%H:%M").time()
-            
             future_trains = [t for t in schedule if str_to_time(t) > now]
-            
             if future_trains:
                 train_list = "\n".join([f"🚆 {time}" for time in future_trains])
-                response = f"جميع القطارات القادمة من {station} إلى {destination}:\n\n{train_list}"
+                response = f"جميع القطارات القادمة من {station} إلى {destination}:\n{train_list}"
             else:
                 response = f"❌ لا يوجد قطارات متبقية اليوم من {station} إلى {destination}."
-            
             keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
             await query.edit_message_text(text=response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
@@ -489,21 +516,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station = data.split("_", 1)[1]
             context.user_data["last_station"] = station
             direction = context.user_data.get("direction")
-            
             now = get_algerian_time().time()
-            
             def str_to_time(s):
                 return datetime.strptime(s, "%H:%M").time()
-
             if direction == DIRECTION_GO:
                 schedule = go_schedule.get(station, [])
                 destination = "العفرون"
             else:
                 schedule = return_schedule.get(station, [])
                 destination = "الجزائر"
-
             next_train = next((t for t in schedule if str_to_time(t) > now), None)
-            
             if next_train:
                 response = f"🚉 القطار الآتي من {station} إلى {destination} ينطلق على الساعة {next_train}."
                 keyboard = [
@@ -513,10 +535,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 response = f"❌ لا يوجد قطارات متبقية اليوم من {station} إلى {destination}."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
-            
             await query.edit_message_text(text=response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
+            
         else:
             await query.edit_message_text("❗ أمر غير معروف.")
             return
@@ -532,30 +553,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     logger.info("🚀 Starting Train Schedule Bot...")
     token = os.getenv("BOT_TOKEN")
-    
     if not token:
         logger.error("❌ BOT_TOKEN not set in environment variables.")
         return
-
     try:
         logger.info(f"📊 MongoDB Status at startup: {'🟢 Available' if MONGO_AVAILABLE else '🔴 Not Available'}")
-        
         if MONGO_AVAILABLE and reports_collection is not None:
             try:
                 count = reports_collection.count_documents({})
                 logger.info(f"📈 Current reports in database: {count}")
             except Exception as e:
                 logger.error(f"❌ Error counting documents at startup: {e}")
-        
         app = ApplicationBuilder().token(token).build()
-
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("debug", debug_db))
         app.add_handler(CallbackQueryHandler(handle_callback))
-
         logger.info("✅ Train Schedule Bot is running with Algeria timezone and MongoDB...")
         app.run_polling()
-        
     except Exception as e:
         logger.error(f"❌ Bot failed to start: {e}")
         logger.exception(e)
