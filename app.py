@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Set Algerian time zone
-ALGERIA_TZ = pyyz.timezone('Africa/Algiers')
+ALGERIA_TZ = pytz.timezone('Africa/Algiers')
 
 # Constants
 DIRECTION_GO = "go"
