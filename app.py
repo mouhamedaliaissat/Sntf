@@ -248,7 +248,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خ_optionًا:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -311,22 +311,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     station_reports = get_reports_by_station_from_db(station)
                     if not station_reports:
                         response = f"❌ لا توجد تقارير للمحطة: {station}"
+                        keyboard = [
+                            [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
+                            [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
+                        ]
                     else:
                         response = f"📋 تقارير المحطة: {station}\n\n"
                         # Sort by timestamp (newest first) and show last 10
                         sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
+                        
+                        # Create the keyboard with delete buttons
+                        keyboard = []
                         for i, rpt in enumerate(sorted_reports):
                             direction_text = "الجزائر الى العفرون" if rpt["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                            response += f"{i+1}. 🧭 {direction_text}\n   🕐 {rpt['time']}\n"
-
-                            # Add delete button for each report
+                            response += f"{i+1}. 🧭 {direction_text}\n   🕐 {rpt['time']}\n\n"
+                            
+                            # Add a delete button for each report as a separate row in the keyboard
                             rpt_id = str(rpt['_id'])
-                            response += f"   [🗑️ حذف](callback_data='delete_report_{rpt_id}')\n\n"
+                            keyboard.append([InlineKeyboardButton("🗑️ حذف", callback_data=f'delete_report_{rpt_id}')])
+                        
+                        # Add navigation buttons at the end
+                        keyboard.append([InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")])
+                        keyboard.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
 
-                    keyboard = [
-                        [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
-                        [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
-                    ]
                     await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 else:
                     await query.edit_message_text("❌ التقرير غير موجود.")
@@ -469,23 +476,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station_reports = get_reports_by_station_from_db(selected_station)
             if not station_reports:
                 response = f"❌ لا توجد تقارير للمحطة: {selected_station}"
+                keyboard = [
+                    [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
+                    [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
+                ]
+                await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
                 response = f"📋 تقارير المحطة: {selected_station}\n\n"
                 # Sort by timestamp (newest first) and show last 10
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
+                
+                # Create the keyboard with delete buttons
+                keyboard = []
                 for i, report in enumerate(sorted_reports):
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
-
-                    # Add delete button for each report
+                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n\n"
+                    
+                    # Add a delete button for each report as a separate row in the keyboard
                     report_id = str(report['_id'])
-                    response += f"   [🗑️ حذف](callback_data='delete_report_{report_id}')\n\n" # Corrected placement
-
-            keyboard = [
-                [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
-                [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
-            ]
-            await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
+                    keyboard.append([InlineKeyboardButton("🗑️ حذف", callback_data=f'delete_report_{report_id}')])
+                
+                # Add navigation buttons at the end
+                keyboard.append([InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")])
+                keyboard.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
+                
+                await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
         # Original functionality
