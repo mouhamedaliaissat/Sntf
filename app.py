@@ -134,7 +134,6 @@ def save_report_to_db(report_data):
     logger.info(f"💾 Attempting to save report to database: {report_data}")
     try:
         if reports_collection is not None:
-:
             logger.info("📤 Inserting document into MongoDB...")
             result = reports_collection.insert_one(report_data)
             logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
