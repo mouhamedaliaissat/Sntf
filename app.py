@@ -21,6 +21,9 @@ ALGERIA_TZ = pytz.timezone('Africa/Algiers')
 # Constants
 DIRECTION_GO = "go"
 DIRECTION_RETURN = "return"
+# Emojis for rating
+UPVOTE_EMOJI = "✅"
+DOWNVOTE_EMOJI = "❌"
 
 # MongoDB setup
 MONGODB_URI = os.getenv("MONGODB_URI")
@@ -120,19 +123,23 @@ def get_algerian_time():
 def save_report_to_db(report_data):
     logger.info(f"💾 Attempting to save report to database: {report_data}")
     try:
+        # Initialize votes if not present
+        if "upvotes" not in report_data:
+             report_data["upvotes"] = 0
+        if "downvotes" not in report_data:
+             report_data["downvotes"] = 0
         if reports_collection is not None:
             logger.info("📤 Inserting document into MongoDB...")
             result = reports_collection.insert_one(report_data)
             logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
-            # Return the ID as a string for use in callback_data
-            return str(result.inserted_id)
+            return True
         else:
             logger.warning("⚠️ MongoDB collection not available for saving")
-            return None
+            return False
     except Exception as e:
         logger.error(f"❌ Error saving report to MongoDB: {e}")
         logger.exception(e)
-        return None
+        return False
 
 def get_all_reports_from_db():
     logger.info("📥 Retrieving all reports from database...")
@@ -164,44 +171,37 @@ def get_reports_by_station_from_db(station):
         logger.exception(e)
         return []
 
-def get_reports_by_user_id(user_id):
-    """Get all reports created by a specific user ID"""
-    logger.info(f"📥 Retrieving reports for user ID: {user_id}")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find({"user_id": str(user_id)}))
-            logger.info(f"📊 Retrieved {len(reports)} reports for user {user_id}")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading (user reports)")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports by user ID from MongoDB: {e}")
-        logger.exception(e)
-        return []
-
-def delete_report_from_db(report_id):
-    """Delete a report by its MongoDB ID"""
-    logger.info(f"🗑️ Attempting to delete report with ID: {report_id}")
+# --- NEW RATING FUNCTIONS ---
+def update_vote_in_db(report_id, vote_type, increment=1):
+    """
+    Update upvotes or downvotes for a report.
+    vote_type: 'upvote' or 'downvote'
+    increment: +1 to add, -1 to remove
+    """
+    logger.info(f"🗳️ Updating {vote_type} for report {report_id} by {increment}")
     try:
         if reports_collection is not None:
             from bson import ObjectId
-            # Ensure report_id is a valid ObjectId string
             if not ObjectId.is_valid(report_id):
                 logger.error(f"❌ Invalid ObjectId format: {report_id}")
                 return False
-            result = reports_collection.delete_one({"_id": ObjectId(report_id)})
-            if result.deleted_count > 0:
-                logger.info(f"✅ Successfully deleted report with ID: {report_id}")
+
+            field = "upvotes" if vote_type == "upvote" else "downvotes"
+            result = reports_collection.update_one(
+                {"_id": ObjectId(report_id)},
+                {"$inc": {field: increment}}
+            )
+            if result.modified_count > 0:
+                logger.info(f"✅ Successfully updated {vote_type} for report {report_id}")
                 return True
             else:
-                logger.warning(f"⚠️ No report found with ID: {report_id}")
+                logger.warning(f"⚠️ No report found or no change for {vote_type} on report {report_id}")
                 return False
         else:
-            logger.warning("⚠️ MongoDB collection not available for deletion")
+            logger.warning("⚠️ MongoDB collection not available for updating votes")
             return False
     except Exception as e:
-        logger.error(f"❌ Error deleting report from MongoDB: {e}")
+        logger.error(f"❌ Error updating vote in MongoDB: {e}")
         logger.exception(e)
         return False
 
@@ -264,89 +264,88 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خ_optionًا:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         query = update.callback_query
         await query.answer()
         logger.info(f"🎮 Callback received: {query.data}")
-        user_id = query.from_user.id # Get the user ID who clicked the button
+        user_id = str(query.from_user.id) # Get the user ID who clicked the button
         data = query.data
 
-        # --- NEW DELETE REPORT FLOW ---
-        # Handle request to view user's own reports for deletion
-        if data == "delete_my_reports":
-            logger.info(f"🗑️ User {user_id} requested to view their reports for deletion")
-            user_reports = get_reports_by_user_id(user_id)
-            if not user_reports:
-                response = "❌ لم تقم بإنشاء أي تقارير بعد."
-                keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="report_train")]]
-                await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
-                return
-
-            response = "📋 تقاريرك:\n(انقر على التقرير لحذفه)\n\n"
-            keyboard = []
-            # Sort by timestamp (newest first) and show last 15
-            sorted_reports = sorted(user_reports, key=lambda x: x["timestamp"], reverse=True)[:15]
-            for i, report in enumerate(sorted_reports):
-                station = report['station']
-                direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                time_str = report['time']
-                report_id = str(report['_id'])
-                response += f"{i+1}. {station} | {direction_text} | {time_str}\n"
-                # Button to delete this specific report
-                keyboard.append([InlineKeyboardButton(f"🗑️ حذف {i+1}", callback_data=f"confirm_delete_my_report_{report_id}")])
-
-            keyboard.append([InlineKeyboardButton("⬅️ العودة", callback_data="report_train")])
-            await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
-            return
-
-        # Handle confirmation of deleting a user's own report
-        elif data.startswith("confirm_delete_my_report_"):
-            report_id = data.split("_", 4)[4]
-            logger.info(f"🗑️ User {user_id} confirmed deletion of report {report_id}")
-
-            success = delete_report_from_db(report_id)
+        # --- NEW RATING FUNCTIONALITY ---
+        # Handle upvote
+        if data.startswith("rate_up_"):
+            report_id = data.split("_", 2)[2]
+            logger.info(f"👍 User {user_id} upvoted report {report_id}")
+            success = update_vote_in_db(report_id, "upvote", 1)
             if success:
-                response_text = "✅ تم حذف التقرير بنجاح!"
+                 # Refresh the view to show updated counts
+                 # We need to find the station for this report to refresh the view
+                 try:
+                     from bson import ObjectId
+                     report = reports_collection.find_one({"_id": ObjectId(report_id)})
+                     if report and "station" in report:
+                         # Re-display the station reports view
+                         # Store current data in context for refresh
+                         context.user_data['last_rated_station'] = report['station']
+                         # Trigger a refresh by calling the view_station handler logic
+                         # Simple way: just re-edit the message with the same station view
+                         # You might want a more elegant refresh mechanism
+                         data = f"view_station_{report['station']}" # Simulate the callback
+                         # Fall through to the view_station handler below
+                     else:
+                          await query.answer("حدث خطأ في تحديث التصويت.")
+                          return
+                 except Exception as e:
+                     logger.error(f"Error finding report for refresh: {e}")
+                     await query.answer("حدث خطأ في تحديث التصويت.")
+                     return
             else:
-                response_text = "❌ فشل في حذف التقرير. قد يكون التقرير غير موجود."
+                 await query.answer("فشل في تسجيل التصويت.")
+                 return # Don't proceed if DB update failed
 
-            await query.edit_message_text(response_text)
-            # Return to main menu after delay
-            await asyncio.sleep(2)
-            await start(update, context)
-            return
-        # --- END NEW DELETE REPORT FLOW ---
+        # Handle downvote
+        elif data.startswith("rate_down_"):
+            report_id = data.split("_", 3)[2]
+            logger.info(f"👎 User {user_id} downvoted report {report_id}")
+            success = update_vote_in_db(report_id, "downvote", 1)
+            if success:
+                 # Refresh the view (same logic as upvote)
+                 try:
+                     from bson import ObjectId
+                     report = reports_collection.find_one({"_id": ObjectId(report_id)})
+                     if report and "station" in report:
+                         context.user_data['last_rated_station'] = report['station']
+                         data = f"view_station_{report['station']}"
+                     else:
+                          await query.answer("حدث خطأ في تحديث التصويت.")
+                          return
+                 except Exception as e:
+                     logger.error(f"Error finding report for refresh: {e}")
+                     await query.answer("حدث خطأ في تحديث التصويت.")
+                     return
+            else:
+                 await query.answer("فشل في تسجيل التصويت.")
+                 return # Don't proceed if DB update failed
+        # --- END NEW RATING FUNCTIONALITY ---
 
-        # Report Train Arrival - Updated to include delete option
+        # Report Train Arrival
         if data == "report_train":
-            logger.info("📝 User selected to report train arrival or manage reports")
-            # Present options: report new arrival or delete existing reports
-            keyboard = [
-                [InlineKeyboardButton("➕ إبلاغ بوصول جديد", callback_data="report_new_arrival")],
-                [InlineKeyboardButton("🗑️ حذف تقرير", callback_data="delete_my_reports")],
-                [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
-            ]
-            await query.edit_message_text("اختر إجراء:", reply_markup=InlineKeyboardMarkup(keyboard))
+            logger.info("📝 User selected to report train arrival")
+            stations = get_all_stations_ordered()
+            logger.info(f"📊 Showing {len(stations)} stations for reporting")
+            station_buttons = []
+            for i in range(0, len(stations), 2):
+                row = []
+                row.append(InlineKeyboardButton(stations[i], callback_data=f"report_station_{stations[i]}"))
+                if i + 1 < len(stations):
+                    row.append(InlineKeyboardButton(stations[i + 1], callback_data=f"report_station_{stations[i + 1]}"))
+                station_buttons.append(row)
+            station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
+            await query.edit_message_text("📍 اختر المحطة التي وصل إليها القطار:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
-
-        # Sub-option for reporting a new arrival
-        elif data == "report_new_arrival":
-             logger.info("📝 User selected to report a *new* train arrival")
-             stations = get_all_stations_ordered()
-             logger.info(f"📊 Showing {len(stations)} stations for reporting")
-             station_buttons = []
-             for i in range(0, len(stations), 2):
-                 row = []
-                 row.append(InlineKeyboardButton(stations[i], callback_data=f"report_station_{stations[i]}"))
-                 if i + 1 < len(stations):
-                     row.append(InlineKeyboardButton(stations[i + 1], callback_data=f"report_station_{stations[i + 1]}"))
-                 station_buttons.append(row)
-             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="report_train")])
-             await query.edit_message_text("📍 اختر المحطة التي وصل إليها القطار:", reply_markup=InlineKeyboardMarkup(station_buttons))
-             return
 
         elif data.startswith("report_station_"):
             station = data.split("_", 2)[2]
@@ -355,7 +354,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="report_direction_go")],
                 [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="report_direction_return")],
-                [InlineKeyboardButton("⬅️ العودة", callback_data="report_train")] # Changed back button
+                [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
             ]
             await query.edit_message_text(f"📍 المحطة: {station}\nاختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
             return
@@ -370,13 +369,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "direction": direction,
                 "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": alg_time.timestamp(),
-                "user_id": str(user_id) # Store the user ID who created the report
+                "user_id": user_id, # Store the user ID who created the report
+                "upvotes": 0,       # Initialize votes
+                "downvotes": 0
             }
             logger.info(f"📝 Report data: {report}")
-            report_id = save_report_to_db(report) # Get the report ID
-            if report_id:
+            success = save_report_to_db(report)
+            if success:
                 response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}"
-                logger.info(f"🎉 Report saved successfully for {station} with ID: {report_id} by user {user_id}")
+                logger.info(f"🎉 Report saved successfully for {station} by user {user_id}")
             else:
                 response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
                 logger.error(f"💥 Failed to save report for {station}")
@@ -395,13 +396,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "direction": direction,
                 "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
                 "timestamp": alg_time.timestamp(),
-                "user_id": str(user_id) # Store the user ID who created the report
+                "user_id": user_id, # Store the user ID who created the report
+                "upvotes": 0,       # Initialize votes
+                "downvotes": 0
             }
             logger.info(f"📝 Report data: {report}")
-            report_id = save_report_to_db(report) # Get the report ID
-            if report_id:
+            success = save_report_to_db(report)
+            if success:
                 response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}"
-                logger.info(f"🎉 Report saved successfully for {station} with ID: {report_id} by user {user_id}")
+                logger.info(f"🎉 Report saved successfully for {station} by user {user_id}")
             else:
                 response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
                 logger.error(f"💥 Failed to save report for {station}")
@@ -410,7 +413,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start(update, context)
             return
 
-        # View Reports (Public view, unchanged)
+        # View Reports
         elif data == "view_reports":
             logger.info("📋 User requested to view reports")
             if not MONGO_AVAILABLE:
@@ -470,14 +473,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = f"📋 تقارير المحطة: {selected_station}\n\n"
                 # Sort by timestamp (newest first) and show last 10
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
+                keyboard = [] # Initialize keyboard for inline buttons
+
                 for i, report in enumerate(sorted_reports):
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n\n" # Added extra newline
+                    upvotes = report.get("upvotes", 0)
+                    downvotes = report.get("downvotes", 0)
+                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
 
-            keyboard = [
-                [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
-                [InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]
-            ]
+                    # Add rating buttons if the user is NOT the creator
+                    report_id = str(report['_id'])
+                    report_creator_id = str(report.get('user_id', ''))
+                    if user_id != report_creator_id:
+                        # Add rating buttons on their own line
+                        keyboard.append([
+                            InlineKeyboardButton(f"{UPVOTE_EMOJI} {upvotes}", callback_data=f'rate_up_{report_id}'),
+                            InlineKeyboardButton(f"{DOWNVOTE_EMOJI} {downvotes}", callback_data=f'rate_down_{report_id}')
+                        ])
+                    else:
+                        response += f"   (تقريرك - {UPVOTE_EMOJI} {upvotes} {DOWNVOTE_EMOJI} {downvotes})\n"
+                    response += "\n" # Add space after each report block
+
+                # Add navigation buttons at the end
+                keyboard.append([InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")])
+                keyboard.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
+
             await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
