@@ -124,8 +124,7 @@ def save_report_to_db(report_data):
             logger.info("📤 Inserting document into MongoDB...")
             result = reports_collection.insert_one(report_data)
             logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
-            # Return the ID as a string for use in callback_data
-            return str(result.inserted_id)
+            return str(result.inserted_id) # Return the ID as string
         else:
             logger.warning("⚠️ MongoDB collection not available for saving")
             return None
@@ -271,20 +270,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = query.data
 
         # --- DELETE REPORT FUNCTIONALITY ---
-        # Handle delete report request (shows confirmation)
-        if data.startswith("delete_report_"):
-            report_id = data.split("_", 2)[2]
-
-            # Show confirmation dialog
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_{report_id}")],
-                [InlineKeyboardButton("❌ إلغاء", callback_data=f"cancel_delete_{report_id}")]
-            ]
-            await query.edit_message_text("⚠️ هل أنت متأكد أنك تريد حذف هذا التقرير؟", reply_markup=InlineKeyboardMarkup(keyboard))
-            return
-
         # Handle delete report confirmation
-        elif data.startswith("confirm_delete_"):
+        if data.startswith("confirm_delete_"):
             report_id = data.split("_", 2)[2]
             # Delete the report, passing the user ID for authorization check
             success = delete_report_from_db(report_id, user_id)
@@ -299,11 +286,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start(update, context)
             return
 
-        # Handle delete report cancellation
+        # Handle delete report cancellation (go back to report view)
         elif data.startswith("cancel_delete_"):
             report_id = data.split("_", 2)[2]
-            # Show the report details again by going back to the station view
-            if not MONGO_AVAILABLE or reports_collection is None:
+            # Find the station for this report and re-display the station view
+             if not MONGO_AVAILABLE or reports_collection is None:
                 await query.edit_message_text("❌ قاعدة البيانات غير متوفرة.")
                 return
 
@@ -315,9 +302,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 report = reports_collection.find_one({"_id": ObjectId(report_id)})
                 if report:
-                    # Find the station and redirect to view_station_ for that station
                     station = report['station']
-                    logger.info(f"🔍 User viewing reports for station (after cancel): {station}")
                     # Re-display the station reports view
                     station_reports = get_reports_by_station_from_db(station)
                     if not station_reports:
@@ -328,11 +313,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          ]
                     else:
                         response = f"📋 تقارير المحطة: {station}\n\n"
-                        # Sort by timestamp (newest first) and show last 10
                         sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
+                        keyboard = [] # Initialize keyboard for inline buttons
 
-                        # Create the keyboard with delete buttons (conditionally)
-                        keyboard = []
                         for i, rpt in enumerate(sorted_reports):
                             direction_text = "الجزائر الى العفرون" if rpt["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
                             response += f"{i+1}. 🧭 {direction_text}\n   🕐 {rpt['time']}\n"
@@ -341,7 +324,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             rpt_id = str(rpt['_id'])
                             rpt_creator_id = str(rpt.get('user_id', '')) # Get creator ID from DB
                             if str(user_id) == rpt_creator_id:
-                                keyboard.append([InlineKeyboardButton("🗑️ حذف", callback_data=f'delete_report_{rpt_id}')])
+                                 # Add the delete button for this specific report
+                                keyboard.append([InlineKeyboardButton("🗑️ حذف", callback_data=f'confirm_delete_{rpt_id}')])
                             else:
                                 response += "   (ليس لك)\n" # Indicate not owned by user
                             response += "\n" # Add space after each report block
@@ -352,7 +336,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 else:
-                    await query.edit_message_text("❌ التقرير غير موجود.")
+                     await query.edit_message_text("❌ التقرير غير موجود.")
             except Exception as e:
                 logger.error(f"❌ Error retrieving report after cancel: {e}")
                 logger.exception(e)
@@ -503,9 +487,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = f"📋 تقارير المحطة: {selected_station}\n\n"
                 # Sort by timestamp (newest first) and show last 10
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
+                keyboard = [] # Initialize keyboard for inline buttons
 
-                # Create the keyboard with delete buttons (conditionally)
-                keyboard = []
                 for i, report in enumerate(sorted_reports):
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
                     response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n"
@@ -514,7 +497,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     report_id = str(report['_id'])
                     report_creator_id = str(report.get('user_id', '')) # Get creator ID from DB
                     if str(user_id) == report_creator_id:
-                        keyboard.append([InlineKeyboardButton("🗑️ حذف", callback_data=f'delete_report_{report_id}')])
+                         # Add the delete button for this specific report
+                        keyboard.append([InlineKeyboardButton("🗑️ حذف", callback_data=f'confirm_delete_{report_id}')])
                     else:
                         response += "   (ليس لك)\n" # Indicate not owned by user
                     response += "\n" # Add space after each report block
