@@ -420,7 +420,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = f"📋 تقارير المحطة: {selected_station}\n\n"
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
                 for report in sorted_reports:
-                    direction_text = "الجزائر → العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
+                    direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
                     response += f"🧭 {direction_text}\n🕐 {report['time']}\n\n"
             
             keyboard = [
