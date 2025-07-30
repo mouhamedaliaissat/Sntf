@@ -270,7 +270,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
         [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
         # --- Add this line for the forum link ---
-        [InlineKeyboardButton("🗣️ منتدى النقاش", url="https://t.me/+40I26LKN_0ZjYzY0")] # <--- Replace with your group's actual link
+        [InlineKeyboardButton("🗣️ منتدى النقاش", url="t.me/+40I26LKN_0ZjYzY0")] # <--- Replace with your group's actual link
         # ----------------------------------------
     ]
     if update.message:
