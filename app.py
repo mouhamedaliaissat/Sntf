@@ -173,13 +173,12 @@ def group_reports_by_minute(reports):
             }
         grouped[key]["count"] += 1
 
-    # Convert the grouped dictionary values to a list and sort by time (newest first)
-    # Note: Sorting by string 'HH:MM' works correctly for chronological order within a day.
+    # Convert the grouped dictionary values to a list and sort by time (newest first for display)
     result = sorted(grouped.values(), key=lambda x: x['time_str'], reverse=True)
     logger.info(f"📊 Grouped into {len(result)} entries.")
     return result
 
-# Function to get all unique stations preserving order from schedules
+# Function to get all unique stations preserving order from schedules (used for reporting)
 def get_all_stations_ordered():
     logger.info("📋 Getting all stations in order...")
     go_stations = list(go_schedule.keys())
@@ -216,7 +215,7 @@ def save_report_to_db(report_data):
         logger.error(f"❌ Error saving report to MongoDB: {e}")
         logger.exception(e)
         return None
-# Debug command (remains unchanged)
+# Debug command (remains largely unchanged)
 async def debug_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to check database status"""
     logger.info("🔍 Debug command received")
@@ -485,119 +484,57 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("🧭 اختر الاتجاه أولاً لعرض التقارير:", reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-        # Handle direction selection for viewing reports
-        elif data == "view_reports_direction_go":
-            context.user_data["view_direction"] = DIRECTION_GO
-            logger.info("🧭 User selected direction: الجزائر الى العفرون for viewing reports")
+        # Handle direction selection for viewing reports (Sorting by Earliest Report Time)
+        elif data in ["view_reports_direction_go", "view_reports_direction_return"]:
+            chosen_direction = DIRECTION_GO if data == "view_reports_direction_go" else DIRECTION_RETURN
+            context.user_data["view_direction"] = chosen_direction
+            direction_text_display = "الجزائر الى العفرون" if chosen_direction == DIRECTION_GO else "العفرون الى الجزائر"
+            logger.info(f"🧭 User selected direction: {direction_text_display} for viewing reports (sorted by time)")
 
-            # --- Helper function to get ordered stations with reports for a specific direction ---
-            def get_ordered_stations_with_reports_for_direction(direction):
-                """Gets stations ordered by schedule, filtered by direction and having reports today."""
-                # 1. Get today's reports for the specific direction
-                reports_today_direction = get_all_reports_from_db_filtered(direction=direction)
+            # 1. Get today's reports for the specific direction
+            reports_today_direction = get_all_reports_from_db_filtered(direction=chosen_direction)
 
-                if not reports_today_direction:
-                    logger.info(f"📊 No reports found for today in direction {direction}")
-                    return [], {} # Return empty list and dict
-
-                # 2. Group reports by station
-                stations_with_reports = {}
-                for report in reports_today_direction:
-                    station = report["station"]
-                    if station not in stations_with_reports:
-                        stations_with_reports[station] = []
-                    stations_with_reports[station].append(report)
-
-                # 3. Get the ordered list of stations based on the schedule for this direction
-                if direction == DIRECTION_GO:
-                    schedule_stations = list(go_schedule.keys())
-                else: # DIRECTION_RETURN
-                    schedule_stations = list(return_schedule.keys())
-
-                # 4. Filter and order stations: Only include stations that have reports today
-                ordered_stations_with_reports = [station for station in schedule_stations if station in stations_with_reports]
-
-                logger.info(f"📊 Found {len(ordered_stations_with_reports)} stations with reports for direction {direction} (ordered by schedule)")
-                return ordered_stations_with_reports, stations_with_reports
-
-            # Get ordered stations and reports data
-            ordered_stations, stations_reports_dict = get_ordered_stations_with_reports_for_direction(DIRECTION_GO)
-
-            if not ordered_stations:
+            if not reports_today_direction:
                 response = "❌ لا توجد تقارير محفوظة لهذا اليوم في هذا الاتجاه."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 return
 
-            # Create station buttons based on ordered list
+            # 2. Group reports by station
+            stations_with_reports = {}
+            for report in reports_today_direction:
+                station = report["station"]
+                if station not in stations_with_reports:
+                    stations_with_reports[station] = []
+                stations_with_reports[station].append(report)
+
+            # 3. Find the earliest report timestamp for each station
+            station_earliest_times = {}
+            for station, reports in stations_with_reports.items():
+                # Find the report with the minimum timestamp for this station
+                earliest_report = min(reports, key=lambda r: r['timestamp'])
+                station_earliest_times[station] = earliest_report['timestamp']
+
+            # 4. Sort stations based on their earliest report time (ascending order)
+            sorted_stations_by_time = sorted(station_earliest_times.keys(), key=lambda s: station_earliest_times[s])
+
+            logger.info(f"📊 Found {len(sorted_stations_by_time)} stations with reports for direction {chosen_direction} (sorted by earliest time)")
+
+            # 5. Create station buttons based on the time-sorted list
             station_buttons = []
-            for i in range(0, len(ordered_stations), 2):
+            for i in range(0, len(sorted_stations_by_time), 2):
                 row = []
-                station1 = ordered_stations[i]
-                report_count1 = len(stations_reports_dict[station1])
+                station1 = sorted_stations_by_time[i]
+                report_count1 = len(stations_with_reports[station1])
                 row.append(InlineKeyboardButton(f"📍 {station1} ({report_count1})", callback_data=f"view_station_filtered_{station1}"))
-                if i + 1 < len(ordered_stations):
-                    station2 = ordered_stations[i + 1]
-                    report_count2 = len(stations_reports_dict[station2])
+                if i + 1 < len(sorted_stations_by_time):
+                    station2 = sorted_stations_by_time[i + 1]
+                    report_count2 = len(stations_with_reports[station2])
                     row.append(InlineKeyboardButton(f"📍 {station2} ({report_count2})", callback_data=f"view_station_filtered_{station2}"))
                 station_buttons.append(row)
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
 
-            await query.edit_message_text("📋 اختر محطة لعرض تقارير اليوم (الجزائر الى العفرون):", reply_markup=InlineKeyboardMarkup(station_buttons))
-            return
-
-        elif data == "view_reports_direction_return":
-            context.user_data["view_direction"] = DIRECTION_RETURN
-            logger.info("🧭 User selected direction: العفرون الى الجزائر for viewing reports")
-
-            # Reuse the same helper logic as above, but for return direction
-            def get_ordered_stations_with_reports_for_direction(direction):
-                """Gets stations ordered by schedule, filtered by direction and having reports today."""
-                reports_today_direction = get_all_reports_from_db_filtered(direction=direction)
-
-                if not reports_today_direction:
-                    logger.info(f"📊 No reports found for today in direction {direction}")
-                    return [], {}
-
-                stations_with_reports = {}
-                for report in reports_today_direction:
-                    station = report["station"]
-                    if station not in stations_with_reports:
-                        stations_with_reports[station] = []
-                    stations_with_reports[station].append(report)
-
-                if direction == DIRECTION_GO:
-                    schedule_stations = list(go_schedule.keys())
-                else: # DIRECTION_RETURN
-                    schedule_stations = list(return_schedule.keys())
-
-                ordered_stations_with_reports = [station for station in schedule_stations if station in stations_with_reports]
-
-                logger.info(f"📊 Found {len(ordered_stations_with_reports)} stations with reports for direction {direction} (ordered by schedule)")
-                return ordered_stations_with_reports, stations_with_reports
-
-            ordered_stations, stations_reports_dict = get_ordered_stations_with_reports_for_direction(DIRECTION_RETURN)
-
-            if not ordered_stations:
-                response = "❌ لا توجد تقارير محفوظة لهذا اليوم في هذا الاتجاه."
-                keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
-                await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
-                return
-
-            station_buttons = []
-            for i in range(0, len(ordered_stations), 2):
-                row = []
-                station1 = ordered_stations[i]
-                report_count1 = len(stations_reports_dict[station1])
-                row.append(InlineKeyboardButton(f"📍 {station1} ({report_count1})", callback_data=f"view_station_filtered_{station1}"))
-                if i + 1 < len(ordered_stations):
-                    station2 = ordered_stations[i + 1]
-                    report_count2 = len(stations_reports_dict[station2])
-                    row.append(InlineKeyboardButton(f"📍 {station2} ({report_count2})", callback_data=f"view_station_filtered_{station2}"))
-                station_buttons.append(row)
-            station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
-
-            await query.edit_message_text("📋 اختر محطة لعرض تقارير اليوم (العفرون الى الجزائر):", reply_markup=InlineKeyboardMarkup(station_buttons))
+            await query.edit_message_text(f"📋 اختر محطة لعرض تقارير اليوم ({direction_text_display}) مرتبة حسب وقت التقرير:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
 
         # View Station Reports (Filtered by previously selected direction)
@@ -621,7 +558,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station_reports_raw = get_reports_by_station_from_db_filtered(station=selected_station, direction=chosen_direction)
 
             if not station_reports_raw:
-                direction_text_display = "الجزائر الى العفرون" if chosen_direction == DIRECTION_GO else "العفرون الى الجزائر"
+                direction_text_display = "الجزائر ➡️ العفرون" if chosen_direction == DIRECTION_GO else "العفرون ➡️ الجزائر"
                 response = f"❌ لا توجد تقارير لهذا اليوم للمحطة: {selected_station} في اتجاه {direction_text_display}"
             else:
                 # Group the raw reports by minute
