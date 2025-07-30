@@ -529,7 +529,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     response = f"📋 تقارير اليوم للمحطة: {selected_station}\n"
                     # Show last 10 grouped entries (already sorted by time, newest first)
                     for i, grouped_report in enumerate(grouped_reports_list[:10]):
-                        direction_text = "الجزائر ➡️ العفرون" if grouped_report["direction"] == DIRECTION_GO else "العفرون ➡️ الجزائر"
+                        direction_text = "الجزائر الى العفرون" if grouped_report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
                         time_str = grouped_report['time_str']
                         count = grouped_report['count']
                         # Add checkmark and count if more than one
