@@ -269,9 +269,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")],
         [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
         [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
-        # --- Add this line for the forum link ---
-        [InlineKeyboardButton("🗣️ منتدى النقاش", url="t.me/+40I26LKN_0ZjYzY0")] # <--- Replace with your group's actual link
-        # ----------------------------------------
+        [InlineKeyboardButton("🗣️ منتدى الدردشة", link="https://t.me/+40I26LKN_0ZjYzY0")]
     ]
     if update.message:
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -561,7 +559,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station_reports_raw = get_reports_by_station_from_db_filtered(station=selected_station, direction=chosen_direction)
 
             if not station_reports_raw:
-                direction_text_display = "الجزائر ➡️ العفرون" if chosen_direction == DIRECTION_GO else "العفرون ➡️ الجزائر"
+                direction_text_display = "الجزائر الى العفرون" if chosen_direction == DIRECTION_GO else "العفرون الى الجزائر"
                 response = f"❌ لا توجد تقارير لهذا اليوم للمحطة: {selected_station} في اتجاه {direction_text_display}"
             else:
                 # Group the raw reports by minute
