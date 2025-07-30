@@ -273,7 +273,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🗣️ منتدى النقاش", url="https://t.me/+40I26LKN_0ZjYzY0")] # <--- Replace with your group's actual link
         # ----------------------------------------
     ]
-    ]
     if update.message:
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
