@@ -269,7 +269,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")],
         [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
         [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
-        [InlineKeyboardButton("🗣️ منتدى الدردشة", link="https://t.me/+40I26LKN_0ZjYzY0")]
     ]
     if update.message:
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
