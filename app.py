@@ -268,7 +268,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🚆 الجزائر الى العفرون", callback_data="direction_go")],
         [InlineKeyboardButton("🚆 العفرون الى الجزائر", callback_data="direction_return")],
         [InlineKeyboardButton("📊 إبلاغ بوصول قطار", callback_data="report_train")],
-        [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")]
+        [InlineKeyboardButton("📋 عرض التقارير", callback_data="view_reports")],
         [InlineKeyboardButton("🗣️ تواصل مع آخرين", url="https://t.me/+40I26LKN_0ZjYzY0")]
     ]
     if update.message:
