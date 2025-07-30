@@ -418,10 +418,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"📝 Report data: {report}")
             report_id = save_report_to_db(report) # Get the report ID
             if report_id:
-                response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}"
+                response_text = (f"✅ تم حفظ التقرير!\n"
+                                 f"📍 المحطة: {station}\n"
+                                 f"🧭 الاتجاه: الجزائر الى العفرون\n"
+                                 f"🕐 الوقت: {report['time']}")
                 logger.info(f"🎉 Report saved successfully for {station} with ID: {report_id} by user {user_id}")
             else:
-                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: الجزائر الى العفرون\n🕐 الوقت: {report['time']}\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
+                response_text = (f"❌ فشل حفظ التقرير!\n"
+                                 f"📍 المحطة: {station}\n"
+                                 f"🧭 الاتجاه: الجزائر الى العفرون\n"
+                                 f"🕐 الوقت: {report['time']}\n"
+                                 f"⚠️ مشكلة في الاتصال بقاعدة البيانات")
                 logger.error(f"💥 Failed to save report for {station}")
             await query.edit_message_text(response_text)
             await asyncio.sleep(3)
@@ -443,10 +450,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"📝 Report data: {report}")
             report_id = save_report_to_db(report) # Get the report ID
             if report_id:
-                response_text = f"✅ تم حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}"
+                response_text = (f"✅ تم حفظ التقرير!\n"
+                                 f"📍 المحطة: {station}\n"
+                                 f"🧭 الاتجاه: العفرون الى الجزائر\n"
+                                 f"🕐 الوقت: {report['time']}")
                 logger.info(f"🎉 Report saved successfully for {station} with ID: {report_id} by user {user_id}")
             else:
-                response_text = f"❌ فشل حفظ التقرير!\n📍 المحطة: {station}\n🧭 الاتجاه: العفرون الى الجزائر\n🕐 الوقت: {report['time']}\n⚠️ مشكلة في الاتصال بقاعدة البيانات"
+                response_text = (f"❌ فشل حفظ التقرير!\n"
+                                 f"📍 المحطة: {station}\n"
+                                 f"🧭 الاتجاه: العفرون الى الجزائر\n"
+                                 f"🕐 الوقت: {report['time']}\n"
+                                 f"⚠️ مشكلة في الاتصال بقاعدة البيانات")
                 logger.error(f"💥 Failed to save report for {station}")
             await query.edit_message_text(response_text)
             await asyncio.sleep(3)
@@ -529,8 +543,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 station_buttons.append(row)
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
 
-            await query.edit_message_text("📋 اختر محطة لعرض تقارير اليوم (الجزائر الى
-            العفرون):", reply_markup=InlineKeyboardMarkup(station_buttons))
+            await query.edit_message_text("📋 اختر محطة لعرض تقارير اليوم (الجزائر الى العفرون):", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
 
         elif data == "view_reports_direction_return":
