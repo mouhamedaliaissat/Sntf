@@ -18,8 +18,8 @@ ALGERIA_TZ = pytz.timezone('Africa/Algiers')
 # Constants
 DIRECTION_GO = "go"
 DIRECTION_RETURN = "return"
-# --- Define the desired time format (without seconds) ---
-REPORT_TIME_FORMAT = '%Y-%m-%d %H:%M' # This format excludes seconds
+# --- Define the desired time format (hour:minute only) ---
+REPORT_TIME_FORMAT = '%H:%M' # This format excludes date and seconds
 
 # MongoDB setup
 MONGODB_URI = os.getenv("MONGODB_URI")
@@ -89,116 +89,12 @@ def init_mongodb():
 logger.info("🚀 Initializing MongoDB connection...")
 MONGO_AVAILABLE = init_mongodb()
 logger.info(f"📊 MongoDB Status: {'🟢 Available' if MONGO_AVAILABLE else '🔴 Not Available'}")
-# Function to get all unique stations preserving order from schedules
-def get_all_stations_ordered():
-    logger.info("📋 Getting all stations in order...")
-    go_stations = list(go_schedule.keys())
-    return_stations = list(return_schedule.keys())
-    all_stations = []
-    seen = set()
-    # Add stations from go_schedule first
-    for station in go_stations:
-        if station not in seen:
-            all_stations.append(station)
-            seen.add(station)
-    # Add stations from return_schedule
-    for station in return_stations:
-        if station not in seen:
-            all_stations.append(station)
-            seen.add(station)
-    logger.info(f"📊 Total stations found: {len(all_stations)}")
-    return all_stations
-def get_algerian_time():
-    return datetime.now(ALGERIA_TZ)
-def save_report_to_db(report_data):
-    logger.info(f"💾 Attempting to save report to database: {report_data}")
-    try:
-        if reports_collection is not None:
-            logger.info("📤 Inserting document into MongoDB...")
-            result = reports_collection.insert_one(report_data)
-            logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
-            # Return the ID as a string for use in callback_data
-            return str(result.inserted_id)
-        else:
-            logger.warning("⚠️ MongoDB collection not available for saving")
-            return None
-    except Exception as e:
-        logger.error(f"❌ Error saving report to MongoDB: {e}")
-        logger.exception(e)
-        return None
-def get_all_reports_from_db():
-    logger.info("📥 Retrieving all reports from database...")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find())
-            logger.info(f"📊 Retrieved {len(reports)} reports from database")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports from MongoDB: {e}")
-        logger.exception(e)
-        return []
-def get_reports_by_station_from_db(station):
-    logger.info(f"📥 Retrieving reports for station: {station}")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find({"station": station}))
-            logger.info(f"📊 Retrieved {len(reports)} reports for station {station}")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports by station from MongoDB: {e}")
-        logger.exception(e)
-        return []
-def get_reports_by_user_id(user_id):
-    """Get all reports created by a specific user ID"""
-    logger.info(f"📥 Retrieving reports for user ID: {user_id}")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find({"user_id": str(user_id)}))
-            logger.info(f"📊 Retrieved {len(reports)} reports for user {user_id}")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading (user reports)")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports by user ID from MongoDB: {e}")
-        logger.exception(e)
-        return []
-def delete_report_from_db(report_id):
-    """Delete a report by its MongoDB ID"""
-    logger.info(f"🗑️ Attempting to delete report with ID: {report_id}")
-    try:
-        if reports_collection is not None:
-            from bson import ObjectId
-            # Ensure report_id is a valid ObjectId string
-            if not ObjectId.is_valid(report_id):
-                logger.error(f"❌ Invalid ObjectId format: {report_id}")
-                return False
-            result = reports_collection.delete_one({"_id": ObjectId(report_id)})
-            if result.deleted_count > 0:
-                logger.info(f"✅ Successfully deleted report with ID: {report_id}")
-                return True
-            else:
-                logger.warning(f"⚠️ No report found with ID: {report_id}")
-                return False
-        else:
-            logger.warning("⚠️ MongoDB collection not available for deletion")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Error deleting report from MongoDB: {e}")
-        logger.exception(e)
-        return False
 
 # --- Helper function to get start and end of current day in Algeria timezone ---
 def get_current_day_range_in_algeria():
     """Calculates the start (inclusive) and end (exclusive) timestamps for the current day in Algeria."""
     now_algeria = datetime.now(ALGERIA_TZ)
-    # Import needed here or at the top (already imported)
+    # Import needed here or at the top (already imported datetime)
     from datetime import time as dt_time, timedelta
     # Start of today (00:00:00)
     start_of_day = datetime.combine(now_algeria.date(), dt_time.min).replace(tzinfo=ALGERIA_TZ)
@@ -249,7 +145,75 @@ def get_reports_by_station_from_db_filtered(station):
         logger.exception(e)
         return []
 
-# Debug command
+# --- Helper function to group reports by minute ---
+def group_reports_by_minute(reports):
+    """
+    Groups reports by station, direction, and minute.
+    Returns a list of dictionaries with 'station', 'direction', 'time_str', and 'count'.
+    """
+    logger.info("🔄 Grouping reports by minute...")
+    grouped = {}
+    for report in reports:
+        station = report["station"]
+        direction = report["direction"]
+        # Create a key based on station, direction, and the minute part of the timestamp
+        report_time = datetime.fromtimestamp(report["timestamp"], ALGERIA_TZ)
+        # Truncate seconds to get the minute key
+        minute_key = report_time.replace(second=0, microsecond=0)
+        key = (station, direction, minute_key)
+
+        if key not in grouped:
+            grouped[key] = {
+                "station": station,
+                "direction": direction,
+                "time_str": minute_key.strftime(REPORT_TIME_FORMAT), # Format as HH:MM
+                "count": 0
+            }
+        grouped[key]["count"] += 1
+
+    # Convert the grouped dictionary values to a list and sort by time (newest first)
+    result = sorted(grouped.values(), key=lambda x: datetime.strptime(x['time_str'], REPORT_TIME_FORMAT), reverse=True)
+    logger.info(f"📊 Grouped into {len(result)} entries.")
+    return result
+
+# Function to get all unique stations preserving order from schedules
+def get_all_stations_ordered():
+    logger.info("📋 Getting all stations in order...")
+    go_stations = list(go_schedule.keys())
+    return_stations = list(return_schedule.keys())
+    all_stations = []
+    seen = set()
+    # Add stations from go_schedule first
+    for station in go_stations:
+        if station not in seen:
+            all_stations.append(station)
+            seen.add(station)
+    # Add stations from return_schedule
+    for station in return_stations:
+        if station not in seen:
+            all_stations.append(station)
+            seen.add(station)
+    logger.info(f"📊 Total stations found: {len(all_stations)}")
+    return all_stations
+def get_algerian_time():
+    return datetime.now(ALGERIA_TZ)
+def save_report_to_db(report_data):
+    logger.info(f"💾 Attempting to save report to database: {report_data}")
+    try:
+        if reports_collection is not None:
+            logger.info("📤 Inserting document into MongoDB...")
+            result = reports_collection.insert_one(report_data)
+            logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
+            # Return the ID as a string for use in callback_data
+            return str(result.inserted_id)
+        else:
+            logger.warning("⚠️ MongoDB collection not available for saving")
+            return None
+    except Exception as e:
+        logger.error(f"❌ Error saving report to MongoDB: {e}")
+        logger.exception(e)
+        return None
+# Debug command (remains unchanged)
 async def debug_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to check database status"""
     logger.info("🔍 Debug command received")
@@ -308,6 +272,49 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- Helper functions for user-specific actions (remain unchanged) ---
+def get_reports_by_user_id(user_id):
+    """Get all reports created by a specific user ID"""
+    logger.info(f"📥 Retrieving reports for user ID: {user_id}")
+    try:
+        if reports_collection is not None:
+            reports = list(reports_collection.find({"user_id": str(user_id)}))
+            logger.info(f"📊 Retrieved {len(reports)} reports for user {user_id}")
+            return reports
+        else:
+            logger.warning("⚠️ MongoDB collection not available for reading (user reports)")
+            return []
+    except Exception as e:
+        logger.error(f"❌ Error getting reports by user ID from MongoDB: {e}")
+        logger.exception(e)
+        return []
+
+def delete_report_from_db(report_id):
+    """Delete a report by its MongoDB ID"""
+    logger.info(f"🗑️ Attempting to delete report with ID: {report_id}")
+    try:
+        if reports_collection is not None:
+            from bson import ObjectId
+            # Ensure report_id is a valid ObjectId string
+            if not ObjectId.is_valid(report_id):
+                logger.error(f"❌ Invalid ObjectId format: {report_id}")
+                return False
+            result = reports_collection.delete_one({"_id": ObjectId(report_id)})
+            if result.deleted_count > 0:
+                logger.info(f"✅ Successfully deleted report with ID: {report_id}")
+                return True
+            else:
+                logger.warning(f"⚠️ No report found with ID: {report_id}")
+                return False
+        else:
+            logger.warning("⚠️ MongoDB collection not available for deletion")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Error deleting report from MongoDB: {e}")
+        logger.exception(e)
+        return False
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         query = update.callback_query
@@ -400,9 +407,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report = {
                 "station": station,
                 "direction": direction,
-                # --- Use the new time format ---
+                # --- Use the new time format (Hour:Minute only) ---
                 "time": alg_time.strftime(REPORT_TIME_FORMAT), # Changed from '%Y-%m-%d %H:%M:%S'
-                "timestamp": alg_time.timestamp(),
+                "timestamp": alg_time.timestamp(), # Keep timestamp for grouping/filtering
                 "user_id": str(user_id) # Store the user ID who created the report
             }
             logger.info(f"📝 Report data: {report}")
@@ -425,9 +432,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report = {
                 "station": station,
                 "direction": direction,
-                 # --- Use the new time format ---
+                 # --- Use the new time format (Hour:Minute only) ---
                 "time": alg_time.strftime(REPORT_TIME_FORMAT), # Changed from '%Y-%m-%d %H:%M:%S'
-                "timestamp": alg_time.timestamp(),
+                "timestamp": alg_time.timestamp(), # Keep timestamp for grouping/filtering
                 "user_id": str(user_id) # Store the user ID who created the report
             }
             logger.info(f"📝 Report data: {report}")
@@ -442,18 +449,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(3)
             await start(update, context)
             return
-        # View Reports (Public view - MODIFIED to filter by today)
+        # View Reports (Public view - MODIFIED to filter by today and group by minute)
         elif data == "view_reports":
-            logger.info("📋 User requested to view TODAY'S reports")
+            logger.info("📋 User requested to view TODAY'S reports (grouped by minute)")
             if not MONGO_AVAILABLE:
                 response = "❌ قاعدة البيانات غير متوفرة حالياً."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 logger.warning("⚠️ View reports: MongoDB not available")
                 return
-            # Use the NEW filtered function
+            # Use the NEW filtered function to get today's reports
             reports = get_all_reports_from_db_filtered()
-            logger.info(f"📊 Found {len(reports)} reports for today")
+            logger.info(f"📊 Found {len(reports)} reports for today (before grouping)")
 
             if not reports:
                 response = "❌ لا توجد تقارير محفوظة لهذا اليوم."
@@ -461,17 +468,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 return
 
-            stations_with_reports = {}
-            for report in reports:
-                station = report["station"]
-                if station not in stations_with_reports:
-                    stations_with_reports[station] = []
-                stations_with_reports[station].append(report)
+            # Group reports by station, direction, and minute
+            grouped_reports = group_reports_by_minute(reports)
+
+            # Organize grouped reports by station for UI
+            stations_with_grouped_reports = {}
+            for grouped_report in grouped_reports:
+                station = grouped_report["station"]
+                if station not in stations_with_grouped_reports:
+                    stations_with_grouped_reports[station] = []
+                stations_with_grouped_reports[station].append(grouped_report)
 
             all_stations = get_all_stations_ordered()
             # Ensure stations are ordered based on their appearance in schedules AND having reports today
-            stations_with_reports_ordered = [station for station in all_stations if station in stations_with_reports]
-            logger.info(f"📊 Stations with reports today: {len(stations_with_reports_ordered)}")
+            stations_with_reports_ordered = [station for station in all_stations if station in stations_with_grouped_reports]
+            logger.info(f"📊 Stations with reports today (grouped): {len(stations_with_reports_ordered)}")
 
             if not stations_with_reports_ordered:
                  response = "❌ لا توجد تقارير محفوظة لهذا اليوم."
@@ -483,11 +494,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i in range(0, len(stations_with_reports_ordered), 2):
                 row = []
                 station1 = stations_with_reports_ordered[i]
-                report_count1 = len(stations_with_reports[station1])
+                # Count total grouped entries for this station
+                report_count1 = len(stations_with_grouped_reports[station1])
                 row.append(InlineKeyboardButton(f"📍 {station1} ({report_count1})", callback_data=f"view_station_{station1}"))
                 if i + 1 < len(stations_with_reports_ordered):
                     station2 = stations_with_reports_ordered[i + 1]
-                    report_count2 = len(stations_with_reports[station2])
+                    report_count2 = len(stations_with_grouped_reports[station2])
                     row.append(InlineKeyboardButton(f"📍 {station2} ({report_count2})", callback_data=f"view_station_{station2}"))
                 station_buttons.append(row)
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
@@ -496,25 +508,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("view_station_"):
             selected_station = data.split("_", 2)[2]
-            logger.info(f"🔍 User viewing TODAY'S reports for station: {selected_station}")
+            logger.info(f"🔍 User viewing TODAY'S grouped reports for station: {selected_station}")
             if not MONGO_AVAILABLE:
                 response = "❌ قاعدة البيانات غير متوفرة حالياً."
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
                 await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
                 return
-            # Use the NEW filtered function
-            station_reports = get_reports_by_station_from_db_filtered(selected_station)
+            # Use the NEW filtered function to get today's reports for the station
+            station_reports_raw = get_reports_by_station_from_db_filtered(selected_station)
 
-            if not station_reports:
+            if not station_reports_raw:
                 response = f"❌ لا توجد تقارير لهذا اليوم للمحطة: {selected_station}"
             else:
-                response = f"📋 تقارير اليوم للمحطة: {selected_station}\n" # Updated message
-                # Sort by timestamp (newest first) and show last 10 (of today)
-                sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
-                for i, report in enumerate(sorted_reports):
-                    direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                    # The time is already formatted correctly when saved
-                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n" # Time format is already correct
+                # Group the raw reports by minute
+                grouped_reports_list = group_reports_by_minute(station_reports_raw)
+
+                if not grouped_reports_list:
+                     response = f"❌ لا توجد تقارير لهذا اليوم للمحطة: {selected_station} (after grouping)"
+                else:
+                    response = f"📋 تقارير اليوم للمحطة: {selected_station}\n"
+                    # Show last 10 grouped entries (already sorted by time, newest first)
+                    for i, grouped_report in enumerate(grouped_reports_list[:10]):
+                        direction_text = "الجزائر ➡️ العفرون" if grouped_report["direction"] == DIRECTION_GO else "العفرون ➡️ الجزائر"
+                        time_str = grouped_report['time_str']
+                        count = grouped_report['count']
+                        # Add checkmark and count if more than one
+                        count_display = f" ✅ ({count})" if count > 1 else ""
+                        response += f"{i+1}. 🧭 {direction_text}\n   🕐 {time_str}{count_display}\n"
 
             keyboard = [
                 [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
@@ -522,7 +542,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
-        # Original functionality
+        # Original functionality (remains unchanged)
         elif data == "direction_go":
             context.user_data["direction"] = DIRECTION_GO
             stations = list(go_schedule.keys())
