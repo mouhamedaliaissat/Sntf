@@ -1,39 +1,34 @@
 import os
 import logging
-from datetime import datetime, time as dt_time, timedelta # Added necessary imports
+from datetime import datetime
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
 from schedules import go_schedule, return_schedule
 from pymongo import MongoClient, errors
 import asyncio
-# Import for ObjectId validation in delete function
-from bson import ObjectId
-
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 # Set Algerian time zone
 ALGERIA_TZ = pytz.timezone('Africa/Algiers')
-
 # Constants
 DIRECTION_GO = "go"
 DIRECTION_RETURN = "return"
+# --- Define the desired time format (without seconds) ---
+REPORT_TIME_FORMAT = '%Y-%m-%d %H:%M' # This format excludes seconds
 
 # MongoDB setup
 MONGODB_URI = os.getenv("MONGODB_URI")
 DB_NAME = "train_bot"
 COLLECTION_NAME = "reports"
-
 # Initialize MongoDB client with error handling
 client = None
 reports_collection = None
 MONGO_AVAILABLE = False
-
 def init_mongodb():
     global client, reports_collection, MONGO_AVAILABLE
     logger.info("🔧 Starting MongoDB initialization...")
@@ -90,16 +85,121 @@ def init_mongodb():
         logger.error(f"❌ Unexpected error during MongoDB initialization: {e}")
         logger.exception(e)
     return False
-
 # Initialize MongoDB on startup
 logger.info("🚀 Initializing MongoDB connection...")
 MONGO_AVAILABLE = init_mongodb()
 logger.info(f"📊 MongoDB Status: {'🟢 Available' if MONGO_AVAILABLE else '🔴 Not Available'}")
+# Function to get all unique stations preserving order from schedules
+def get_all_stations_ordered():
+    logger.info("📋 Getting all stations in order...")
+    go_stations = list(go_schedule.keys())
+    return_stations = list(return_schedule.keys())
+    all_stations = []
+    seen = set()
+    # Add stations from go_schedule first
+    for station in go_stations:
+        if station not in seen:
+            all_stations.append(station)
+            seen.add(station)
+    # Add stations from return_schedule
+    for station in return_stations:
+        if station not in seen:
+            all_stations.append(station)
+            seen.add(station)
+    logger.info(f"📊 Total stations found: {len(all_stations)}")
+    return all_stations
+def get_algerian_time():
+    return datetime.now(ALGERIA_TZ)
+def save_report_to_db(report_data):
+    logger.info(f"💾 Attempting to save report to database: {report_data}")
+    try:
+        if reports_collection is not None:
+            logger.info("📤 Inserting document into MongoDB...")
+            result = reports_collection.insert_one(report_data)
+            logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
+            # Return the ID as a string for use in callback_data
+            return str(result.inserted_id)
+        else:
+            logger.warning("⚠️ MongoDB collection not available for saving")
+            return None
+    except Exception as e:
+        logger.error(f"❌ Error saving report to MongoDB: {e}")
+        logger.exception(e)
+        return None
+def get_all_reports_from_db():
+    logger.info("📥 Retrieving all reports from database...")
+    try:
+        if reports_collection is not None:
+            reports = list(reports_collection.find())
+            logger.info(f"📊 Retrieved {len(reports)} reports from database")
+            return reports
+        else:
+            logger.warning("⚠️ MongoDB collection not available for reading")
+            return []
+    except Exception as e:
+        logger.error(f"❌ Error getting reports from MongoDB: {e}")
+        logger.exception(e)
+        return []
+def get_reports_by_station_from_db(station):
+    logger.info(f"📥 Retrieving reports for station: {station}")
+    try:
+        if reports_collection is not None:
+            reports = list(reports_collection.find({"station": station}))
+            logger.info(f"📊 Retrieved {len(reports)} reports for station {station}")
+            return reports
+        else:
+            logger.warning("⚠️ MongoDB collection not available for reading")
+            return []
+    except Exception as e:
+        logger.error(f"❌ Error getting reports by station from MongoDB: {e}")
+        logger.exception(e)
+        return []
+def get_reports_by_user_id(user_id):
+    """Get all reports created by a specific user ID"""
+    logger.info(f"📥 Retrieving reports for user ID: {user_id}")
+    try:
+        if reports_collection is not None:
+            reports = list(reports_collection.find({"user_id": str(user_id)}))
+            logger.info(f"📊 Retrieved {len(reports)} reports for user {user_id}")
+            return reports
+        else:
+            logger.warning("⚠️ MongoDB collection not available for reading (user reports)")
+            return []
+    except Exception as e:
+        logger.error(f"❌ Error getting reports by user ID from MongoDB: {e}")
+        logger.exception(e)
+        return []
+def delete_report_from_db(report_id):
+    """Delete a report by its MongoDB ID"""
+    logger.info(f"🗑️ Attempting to delete report with ID: {report_id}")
+    try:
+        if reports_collection is not None:
+            from bson import ObjectId
+            # Ensure report_id is a valid ObjectId string
+            if not ObjectId.is_valid(report_id):
+                logger.error(f"❌ Invalid ObjectId format: {report_id}")
+                return False
+            result = reports_collection.delete_one({"_id": ObjectId(report_id)})
+            if result.deleted_count > 0:
+                logger.info(f"✅ Successfully deleted report with ID: {report_id}")
+                return True
+            else:
+                logger.warning(f"⚠️ No report found with ID: {report_id}")
+                return False
+        else:
+            logger.warning("⚠️ MongoDB collection not available for deletion")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Error deleting report from MongoDB: {e}")
+        logger.exception(e)
+        return False
 
 # --- Helper function to get start and end of current day in Algeria timezone ---
 def get_current_day_range_in_algeria():
     """Calculates the start (inclusive) and end (exclusive) timestamps for the current day in Algeria."""
     now_algeria = datetime.now(ALGERIA_TZ)
+    # Import needed here or at the top (already imported)
+    from datetime import time as dt_time, timedelta
     # Start of today (00:00:00)
     start_of_day = datetime.combine(now_algeria.date(), dt_time.min).replace(tzinfo=ALGERIA_TZ)
     # Start of tomorrow (00:00:00) - acts as exclusive end for today
@@ -149,117 +249,6 @@ def get_reports_by_station_from_db_filtered(station):
         logger.exception(e)
         return []
 
-# --- Keep existing functions for user-specific actions and deletion ---
-def get_all_reports_from_db():
-    logger.info("📥 Retrieving all reports from database...")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find())
-            logger.info(f"📊 Retrieved {len(reports)} reports from database")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports from MongoDB: {e}")
-        logger.exception(e)
-        return []
-
-def get_reports_by_station_from_db(station):
-    logger.info(f"📥 Retrieving reports for station: {station}")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find({"station": station}))
-            logger.info(f"📊 Retrieved {len(reports)} reports for station {station}")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports by station from MongoDB: {e}")
-        logger.exception(e)
-        return []
-
-def get_reports_by_user_id(user_id):
-    """Get all reports created by a specific user ID"""
-    logger.info(f"📥 Retrieving reports for user ID: {user_id}")
-    try:
-        if reports_collection is not None:
-            reports = list(reports_collection.find({"user_id": str(user_id)}))
-            logger.info(f"📊 Retrieved {len(reports)} reports for user {user_id}")
-            return reports
-        else:
-            logger.warning("⚠️ MongoDB collection not available for reading (user reports)")
-            return []
-    except Exception as e:
-        logger.error(f"❌ Error getting reports by user ID from MongoDB: {e}")
-        logger.exception(e)
-        return []
-
-def delete_report_from_db(report_id):
-    """Delete a report by its MongoDB ID"""
-    logger.info(f"🗑️ Attempting to delete report with ID: {report_id}")
-    try:
-        if reports_collection is not None:
-            # Ensure report_id is a valid ObjectId string
-            if not ObjectId.is_valid(report_id):
-                logger.error(f"❌ Invalid ObjectId format: {report_id}")
-                return False
-            result = reports_collection.delete_one({"_id": ObjectId(report_id)})
-            if result.deleted_count > 0:
-                logger.info(f"✅ Successfully deleted report with ID: {report_id}")
-                return True
-            else:
-                logger.warning(f"⚠️ No report found with ID: {report_id}")
-                return False
-        else:
-            logger.warning("⚠️ MongoDB collection not available for deletion")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Error deleting report from MongoDB: {e}")
-        logger.exception(e)
-        return False
-
-# Function to get all unique stations preserving order from schedules
-def get_all_stations_ordered():
-    logger.info("📋 Getting all stations in order...")
-    go_stations = list(go_schedule.keys())
-    return_stations = list(return_schedule.keys())
-    all_stations = []
-    seen = set()
-    # Add stations from go_schedule first
-    for station in go_stations:
-        if station not in seen:
-            all_stations.append(station)
-            seen.add(station)
-    # Add stations from return_schedule
-    for station in return_stations:
-        if station not in seen:
-            all_stations.append(station)
-            seen.add(station)
-    logger.info(f"📊 Total stations found: {len(all_stations)}")
-    return all_stations
-
-def get_algerian_time():
-    return datetime.now(ALGERIA_TZ)
-
-def save_report_to_db(report_data):
-    logger.info(f"💾 Attempting to save report to database: {report_data}")
-    try:
-        if reports_collection is not None:
-            logger.info("📤 Inserting document into MongoDB...")
-            result = reports_collection.insert_one(report_data)
-            logger.info(f"✅ Report saved successfully with ID: {result.inserted_id}")
-            # Return the ID as a string for use in callback_data
-            return str(result.inserted_id)
-        else:
-            logger.warning("⚠️ MongoDB collection not available for saving")
-            return None
-    except Exception as e:
-        logger.error(f"❌ Error saving report to MongoDB: {e}")
-        logger.exception(e)
-        return None
-
 # Debug command
 async def debug_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to check database status"""
@@ -307,7 +296,6 @@ async def debug_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ Debug command error: {e}")
         logger.exception(e)
         await update.message.reply_text(f"❌ Database Error: {str(e)}")
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("🏠 Start command received")
     keyboard = [
@@ -320,7 +308,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await update.callback_query.edit_message_text("👋 مرحبًا بك! اختر خيارًا:", reply_markup=InlineKeyboardMarkup(keyboard))
-
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         query = update.callback_query
@@ -328,7 +315,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"🎮 Callback received: {query.data}")
         user_id = query.from_user.id # Get the user ID who clicked the button
         data = query.data
-
         # --- NEW DELETE REPORT FLOW ---
         # Handle request to view user's own reports for deletion
         if data == "delete_my_reports":
@@ -346,7 +332,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i, report in enumerate(sorted_reports):
                 station = report['station']
                 direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                time_str = report['time']
+                time_str = report['time'] # This will now be in the new format
                 report_id = str(report['_id'])
                 response += f"{i+1}. {station} | {direction_text} | {time_str}\n"
                 # Button to delete this specific report
@@ -354,7 +340,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("⬅️ العودة", callback_data="report_train")])
             await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         # Handle confirmation of deleting a user's own report
         elif data.startswith("confirm_delete_my_report_"):
             report_id = data.split("_", 4)[4]
@@ -369,9 +354,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(2)
             await start(update, context)
             return
-
         # --- END NEW DELETE REPORT FLOW ---
-
         # Report Train Arrival - Updated to include delete option
         if data == "report_train":
             logger.info("📝 User selected to report train arrival or manage reports")
@@ -383,7 +366,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text("اختر إجراء:", reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         # Sub-option for reporting a new arrival
         elif data == "report_new_arrival":
              logger.info("📝 User selected to report a *new* train arrival")
@@ -399,7 +381,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
              station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="report_train")])
              await query.edit_message_text("📍 اختر المحطة التي وصل إليها القطار:", reply_markup=InlineKeyboardMarkup(station_buttons))
              return
-
         elif data.startswith("report_station_"):
             station = data.split("_", 2)[2]
             context.user_data["report_station"] = station
@@ -411,7 +392,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(f"📍 المحطة: {station}\nاختر اتجاه القطار:", reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         elif data == "report_direction_go":
             station = context.user_data.get("report_station")
             direction = DIRECTION_GO
@@ -420,7 +400,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report = {
                 "station": station,
                 "direction": direction,
-                "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
+                # --- Use the new time format ---
+                "time": alg_time.strftime(REPORT_TIME_FORMAT), # Changed from '%Y-%m-%d %H:%M:%S'
                 "timestamp": alg_time.timestamp(),
                 "user_id": str(user_id) # Store the user ID who created the report
             }
@@ -436,7 +417,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(3)
             await start(update, context)
             return
-
         elif data == "report_direction_return":
             station = context.user_data.get("report_station")
             direction = DIRECTION_RETURN
@@ -445,7 +425,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report = {
                 "station": station,
                 "direction": direction,
-                "time": alg_time.strftime('%Y-%m-%d %H:%M:%S'),
+                 # --- Use the new time format ---
+                "time": alg_time.strftime(REPORT_TIME_FORMAT), # Changed from '%Y-%m-%d %H:%M:%S'
                 "timestamp": alg_time.timestamp(),
                 "user_id": str(user_id) # Store the user ID who created the report
             }
@@ -461,7 +442,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(3)
             await start(update, context)
             return
-
         # View Reports (Public view - MODIFIED to filter by today)
         elif data == "view_reports":
             logger.info("📋 User requested to view TODAY'S reports")
@@ -533,7 +513,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 sorted_reports = sorted(station_reports, key=lambda x: x["timestamp"], reverse=True)[:10]
                 for i, report in enumerate(sorted_reports):
                     direction_text = "الجزائر الى العفرون" if report["direction"] == DIRECTION_GO else "العفرون الى الجزائر"
-                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n" # Added extra newline
+                    # The time is already formatted correctly when saved
+                    response += f"{i+1}. 🧭 {direction_text}\n   🕐 {report['time']}\n" # Time format is already correct
 
             keyboard = [
                 [InlineKeyboardButton("📋 عرض محطات أخرى", callback_data="view_reports")],
@@ -541,7 +522,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         # Original functionality
         elif data == "direction_go":
             context.user_data["direction"] = DIRECTION_GO
@@ -553,7 +533,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
             await query.edit_message_text("📍 اختر محطتك:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
-
         elif data == "direction_return":
             context.user_data["direction"] = DIRECTION_RETURN
             stations = list(return_schedule.keys())
@@ -564,11 +543,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             station_buttons.append([InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")])
             await query.edit_message_text("📍 اختر محطتك:", reply_markup=InlineKeyboardMarkup(station_buttons))
             return
-
         elif data == "back_to_start":
             await start(update, context)
             return
-
         elif data == "show_all_trains":
             station = context.user_data.get("last_station")
             direction = context.user_data.get("direction")
@@ -590,7 +567,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
             await query.edit_message_text(text=response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         elif data.startswith("station_"):
             station = data.split("_", 1)[1]
             context.user_data["last_station"] = station
@@ -616,7 +592,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 keyboard = [[InlineKeyboardButton("⬅️ العودة", callback_data="back_to_start")]]
             await query.edit_message_text(text=response, reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         else:
             await query.edit_message_text("❗ أمر غير معروف.")
             return
@@ -627,7 +602,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.edit_message_text("❌ حدث خطأ، يرجى المحاولة مرة أخرى.")
         except:
             pass
-
 def main():
     logger.info("🚀 Starting Train Schedule Bot...")
     token = os.getenv("BOT_TOKEN")
@@ -652,6 +626,5 @@ def main():
         logger.error(f"❌ Bot failed to start: {e}")
         logger.exception(e)
         raise
-
 if __name__ == '__main__':
     main()
